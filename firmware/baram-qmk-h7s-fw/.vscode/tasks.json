@@ -1,0 +1,40 @@
+{
+	"version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-configure",
+      "type": "shell",
+      "windows":{
+        "command": "cmake -S . -B build -G 'MinGW Makefiles' -DKEYBOARD_PATH='${config:keyboard_path}'" ,
+      },
+      "command": "cmake -S . -B build -DKEYBOARD_PATH='${config:keyboard_path}'",
+      "problemMatcher": []
+    },  
+    {
+      "label": "build-build",
+      "type": "shell",
+      "windows":{
+        "command": "cmake -S . -B build -G 'MinGW Makefiles' -DKEYBOARD_PATH='${config:keyboard_path}'; cmake --build build -j20",
+      },
+      "command": "cmake -S . -B build -DKEYBOARD_PATH='${config:keyboard_path}'; cmake --build build -j20",    
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "build-clean",
+      "type": "shell",
+      "command": "cmake --build build --target clean",
+      "problemMatcher": [],
+    },
+
+    {
+      "label": "uf2-make-uf2",
+      "type": "shell",
+      "command": "python3 tools/uf2/uf2conv.py build/baram-45k-h7s.bin --family 0xFFFF0002 --convert --output build/baram-qmk-h7s.uf2",
+      "problemMatcher": [],
+    }        
+  ]
+}

@@ -16,7 +16,7 @@ static bool keysInitGpio(void);
 
 
 
-const static uint8_t row_wr_buf[] = {0x01, 0x02, 0x04, 0x08};
+const static uint8_t row_wr_buf[] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20};
 
 __attribute__((section(".non_cache")))
 static uint16_t col_rd_buf[MATRIX_ROWS] = {0x00,};
@@ -188,7 +188,7 @@ bool keysInitDma(void)
   NodeConfig.DataHandlingConfig.DataAlignment = DMA_DATA_RIGHTALIGN_ZEROPADDED;
   NodeConfig.SrcAddress                       = (uint32_t)&row_wr_buf[0];
   NodeConfig.DstAddress                       = (uint32_t)&GPIOA->ODR;
-  NodeConfig.DataSize                         = sizeof(row_wr_buf);
+  NodeConfig.DataSize                         = MATRIX_ROWS;
   if (HAL_DMAEx_List_BuildNode(&NodeConfig, &Node_GPDMA1_Channel1) != HAL_OK)
   {
     return false;

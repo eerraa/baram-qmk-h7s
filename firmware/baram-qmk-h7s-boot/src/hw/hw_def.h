@@ -6,8 +6,8 @@
 #include "bsp.h"
 
 
-#define _DEF_FIRMWATRE_VERSION    "V241021R1"
-#define _DEF_BOARD_NAME           "BARAM-45K-H7S-BOOT"
+#define _DEF_FIRMWATRE_VERSION    "V241114R1"
+#define _DEF_BOARD_NAME           "BARAM-QMK-H7S-BOOT"
 
 
 // #define _USE_HW_CACHE

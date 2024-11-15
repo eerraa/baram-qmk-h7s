@@ -3,12 +3,11 @@
 #include "eeconfig.h"
 
 
-#define LED_TYPE_MAX_CH       2
+#define LED_TYPE_MAX_CH       1
 
 enum
 {
   LED_TYPE_CAPS = 0,
-  LED_TYPE_SCROLL
 };
 
 typedef union

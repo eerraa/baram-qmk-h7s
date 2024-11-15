@@ -10,7 +10,7 @@ endif()
 if (RGBLIGHT_ENABLE)
   list(APPEND QMK_ADD_FILES "${QMK_ROOT_PATH}/quantum/rgblight/rgblight.c")
   list(APPEND QMK_ADD_FILES "${QMK_ROOT_PATH}/quantum/process_keycode/process_rgb.c")
-  list(APPEND QMK_ADD_FILES "${QMK_KEYBOARD_PATH}/driver/rgblight_drivers.c")
+  list(APPEND QMK_ADD_FILES "${QMK_KEYBOARD_PATH}/port/driver/rgblight_drivers.c")
 endif()  
 
 

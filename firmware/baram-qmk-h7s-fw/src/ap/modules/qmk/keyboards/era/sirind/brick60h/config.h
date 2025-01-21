@@ -12,9 +12,11 @@
 // #define _USE_HW_VCOM
 #define _USE_HW_WS2812
 #define     HW_WS2812_MAX_CH        30
-#define     HW_WS2812_CAPS          0
-#define     HW_WS2812_RGB           1
-#define     HW_WS2812_RGB_CNT       29
+// #define     HW_WS2812_CAPS          0
+#define     HW_WS2812_RGB           0
+#define     HW_WS2812_RGB_CNT       30
+
+#define CAPS_LED_COUNT              30 // 추가
 
 
 // eeprom
@@ -54,3 +56,11 @@
 #define RGBLIGHT_EFFECT_BREATHING
 #define RGBLIGHT_EFFECT_SNAKE
 #define RGBLIGHT_EFFECT_STATIC_GRADIENT
+
+#define RGBLIGHT_EFFECT_ALTERNATING // 추가
+#define RGBLIGHT_EFFECT_CHRISTMAS
+#define RGBLIGHT_EFFECT_KNIGHT
+#define RGBLIGHT_EFFECT_RAINBOW_MOOD
+#define RGBLIGHT_EFFECT_RAINBOW_SWIRL
+#define RGBLIGHT_EFFECT_TWINKLE
+#define VELOCIKEY_ENABLE

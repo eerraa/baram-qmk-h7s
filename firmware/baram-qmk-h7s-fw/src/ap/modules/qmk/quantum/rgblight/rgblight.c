@@ -23,10 +23,13 @@
 #include "debug.h"
 #include "util.h"
 #include "led_tables.h"
+#include "host.h" // 추가
 #include <lib/lib8tion/lib8tion.h>
 #ifdef EEPROM_ENABLE
 #    include "eeprom.h"
 #endif
+
+led_config_t led_config[LED_TYPE_MAX_CH]; // 추가
 
 #ifdef RGBLIGHT_SPLIT
 /* for split keyboard */
@@ -936,7 +939,13 @@ void rgblight_set(void) {
         convert_rgb_to_rgbw(&start_led[i]);
     }
 #endif
-    rgblight_driver.setleds(start_led, num_leds);
+    if (led_config[0].enable) { // 추가
+        if (!host_keyboard_led_state().caps_lock) {
+            rgblight_driver.setleds(start_led, num_leds);
+        }
+    } else {
+        rgblight_driver.setleds(start_led, num_leds);
+    }
 }
 
 #ifdef RGBLIGHT_SPLIT

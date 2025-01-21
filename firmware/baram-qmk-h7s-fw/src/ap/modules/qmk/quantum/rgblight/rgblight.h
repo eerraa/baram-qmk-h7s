@@ -466,3 +466,24 @@ uint8_t rgblight_velocikey_match_speed(uint8_t minValue, uint8_t maxValue);
 #    define velocikey_enabled rgblight_velocikey_enabled
 #    define velocikey_toggle rgblight_velocikey_toggle
 #endif
+
+#ifndef LED_CONFIG_H // 추가
+#define LED_CONFIG_H
+
+#define LED_TYPE_MAX_CH 1
+
+typedef union
+{
+    uint32_t raw;
+
+    struct PACKED
+    {
+        uint8_t enable : 2;
+        uint8_t mode   : 6;
+        HSV     hsv;
+    };
+} led_config_t;
+
+extern led_config_t led_config[LED_TYPE_MAX_CH];  // 외부 참조 선언
+
+#endif

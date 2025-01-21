@@ -2,25 +2,14 @@
 #include "color.h"
 #include "eeconfig.h"
 
-
-#define LED_TYPE_MAX_CH       1
+#if !defined(CAPS_LED_COUNT) // 추가
+#    define CAPS_LED_COUNT 0
+#endif
 
 enum
 {
   LED_TYPE_CAPS = 0,
 };
-
-typedef union
-{
-  uint32_t raw;
-
-  struct PACKED
-  {
-    uint8_t enable : 2;
-    uint8_t mode   : 6;
-    HSV     hsv;
-  };
-} led_config_t;
 
 _Static_assert(sizeof(led_config_t) == sizeof(uint32_t), "EECONFIG out of spec.");
 
@@ -36,7 +25,6 @@ static void via_qmk_led_set_value(uint8_t led_type, uint8_t *data);
 static void via_qmk_led_save(uint8_t led_type);
 
 static led_t leds = {0};
-static led_config_t led_config[LED_TYPE_MAX_CH];
 
 
 EECONFIG_DEBOUNCE_HELPER(led_caps,   EECONFIG_USER_LED_CAPS,   led_config[LED_TYPE_CAPS]);
@@ -62,15 +50,23 @@ void led_update_ports(led_t led_state)
   uint32_t led_color;
   RGB      rgb_color;
 
-
   led_color = WS2812_COLOR_OFF;
-  if (led_config[LED_TYPE_CAPS].enable && led_state.caps_lock)
+  if (led_config[LED_TYPE_CAPS].enable && host_keyboard_led_state().caps_lock) // 추가
   {
     rgb_color = hsv_to_rgb(led_config[LED_TYPE_CAPS].hsv);
     led_color = WS2812_COLOR(rgb_color.r, rgb_color.g, rgb_color.b);
+    for (int i = 0; i < CAPS_LED_COUNT; i++)
+    {
+      ws2812SetColor(i, led_color);
+    }
   }
-  ws2812SetColor(0, led_color);
-  
+  else
+  {
+    for (int i = 0; i < CAPS_LED_COUNT; i++)
+    {
+      ws2812SetColor(i, WS2812_COLOR_OFF);
+    }
+  }
 
   ws2812Refresh();  
 }

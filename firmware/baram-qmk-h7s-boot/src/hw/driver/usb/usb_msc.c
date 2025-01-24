@@ -51,7 +51,7 @@ enum
   DISK_BLOCK_SIZE = 512
 };
 
-const uint8_t msc_disk[DISK_BLOCK_NUM][DISK_BLOCK_SIZE] =
+static uint8_t msc_disk[DISK_BLOCK_NUM][DISK_BLOCK_SIZE] =
 {
   //------------- Block0: Boot Sector -------------//
   // byte_per_sector    = DISK_BLOCK_SIZE; fat12_sector_num_16  = DISK_BLOCK_NUM;
@@ -216,7 +216,7 @@ __attribute__((weak)) int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint3
       firm_ver_t tag_ver;
       firm_ver_t *p_tag = &tag_ver;
       
-      flashRead(FLASH_SIZE_TAG + FLASH_SIZE_VEC, (uint8_t *)p_tag, sizeof(firm_ver_t));
+      flashRead(FLASH_ADDR_FIRM + FLASH_SIZE_TAG + FLASH_SIZE_VEC, (uint8_t *)p_tag, sizeof(firm_ver_t));
 
       len = snprintf((char *)&readme_txt[index], sizeof(readme_txt), "This is BARAM BOOT.\r\n\r\n\r\n");
       index += len;
@@ -236,9 +236,13 @@ __attribute__((weak)) int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint3
       {
         len = snprintf((char *)&readme_txt[index], sizeof(readme_txt), "No Firmware\r\n");
       }
+      index += len;
+      msc_disk[7][60] = index;
 
       uint8_t const* addr = readme_txt;
       memcpy(buffer, addr, bufsize);
+
+      
     }
     return (int32_t) bufsize;
   }

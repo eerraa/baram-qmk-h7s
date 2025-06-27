@@ -3,9 +3,6 @@
 #include "sys_port.h"
 
 
-
-
-
 void via_custom_value_command_kb(uint8_t *data, uint8_t length)
 {
   // data = [ command_id, channel_id, value_id, value_data ]
@@ -17,6 +14,12 @@ void via_custom_value_command_kb(uint8_t *data, uint8_t length)
   {
     via_qmk_led_command(0, data, length);
     return;
+  }
+
+  if (*channel_id == id_qmk_led_row_channel)
+  {
+      via_qmk_led_command(LED_TYPE_ROW, data, length);
+      return;
   }
 
   if (*channel_id == id_qmk_version)

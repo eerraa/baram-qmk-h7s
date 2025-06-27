@@ -10,7 +10,7 @@
 
 
 
-#define QMK_BUILDDATE   "2024-04-23-11:29:54"
+#define QMK_BUILDDATE   "2025-06-27-17:35:30"
 
 
 #define EECONFIG_USER_LED_CAPS        ((void *)((uint32_t)EECONFIG_USER_DATABLOCK +  0)) // 4B
@@ -18,3 +18,4 @@
 #define EECONFIG_USER_KILL_SWITCH_LR  ((void *)((uint32_t)EECONFIG_USER_DATABLOCK +  8)) // 8B
 #define EECONFIG_USER_KILL_SWITCH_UD  ((void *)((uint32_t)EECONFIG_USER_DATABLOCK + 16)) // 8B
 #define EECONFIG_USER_KKUK            ((void *)((uint32_t)EECONFIG_USER_DATABLOCK + 24)) // 4B
+#define EECONFIG_USER_LED_ROW         ((void *)((uint32_t)EECONFIG_USER_DATABLOCK + 28)) // 4B

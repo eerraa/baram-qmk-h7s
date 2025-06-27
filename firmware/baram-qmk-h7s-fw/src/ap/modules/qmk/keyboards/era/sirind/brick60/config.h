@@ -1,7 +1,7 @@
 #pragma once
 
 
-#define KBD_NAME                    "BRICK60H"
+#define KBD_NAME                    "BRICK60"
 
 #define USB_VID                     0x4552
 #define USB_PID                     0x0001
@@ -42,15 +42,23 @@
 // 
 #define EEPROM_ENABLE
 #define RGBLIGHT_SLEEP
-#define RGBLIGHT_DEFAULT_ON         false
+#define RGBLIGHT_DEFAULT_ON         true
 #define RGBLIGHT_DEFAULT_HUE        0
 #define RGBLIGHT_DEFAULT_SAT        0
 #define RGBLIGHT_DEFAULT_VAL        128
 #define RGBLIGHT_LED_COUNT          HW_WS2812_RGB_CNT
-#define RGBLIGHT_LIMIT_VAL          255
+#define RGBLIGHT_LIMIT_VAL          180
 #define RGBLIGHT_SAT_STEP           8
 #define RGBLIGHT_VAL_STEP           8
 #define RGBLIGHT_EFFECT_RGB_TEST
 #define RGBLIGHT_EFFECT_BREATHING
 #define RGBLIGHT_EFFECT_SNAKE
 #define RGBLIGHT_EFFECT_STATIC_GRADIENT
+
+#define RGBLIGHT_EFFECT_ALTERNATING // Added
+#define RGBLIGHT_EFFECT_CHRISTMAS
+#define RGBLIGHT_EFFECT_KNIGHT
+#define RGBLIGHT_EFFECT_RAINBOW_MOOD
+#define RGBLIGHT_EFFECT_RAINBOW_SWIRL
+#define RGBLIGHT_EFFECT_TWINKLE
+#define VELOCIKEY_ENABLE

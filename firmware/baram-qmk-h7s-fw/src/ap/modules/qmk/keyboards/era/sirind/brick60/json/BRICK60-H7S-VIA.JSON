@@ -1,5 +1,5 @@
 {
-  "name": "BRICK60H",
+  "name": "BRICK60",
   "vendorId": "0x4552",
   "productId": "0x0001",
   "matrix": {
@@ -33,6 +33,24 @@
               "label": "Caps Color",
               "type": "color",
               "content": ["id_qmk_led_caps_color", 6, 3]
+            },
+            {
+              "label": "RGB ROW Enable",
+              "type": "toggle",
+              "content": ["id_qmk_led_scroll_enable", 13, 1]
+            },            
+            {
+              "showIf": "{id_qmk_led_scroll_enable} == 1",
+              "label": "RGB ROW Brightness",
+              "type": "range",
+              "options": [0, 255],
+              "content": ["id_qmk_led_scroll_brightness", 13, 2]
+            },
+            {
+              "showIf": "{id_qmk_led_scroll_enable} == 1",
+              "label": "RGB ROW Color",
+              "type": "color",
+              "content": ["id_qmk_led_scroll_color", 13, 3]
             }
           ]
         },

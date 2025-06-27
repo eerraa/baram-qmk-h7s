@@ -17,7 +17,6 @@ endif()
 # 지정한 폴더에 있는 파일만 포함한다.
 #
 file(GLOB QMK_SRC_FILES CONFIGURE_DEPENDS
-  ${QMK_KEYBOARD_PATH}/port/quantum/via.h
   ${QMK_ROOT_PATH}/*.c
   ${QMK_ROOT_PATH}/port/*.c
   ${QMK_ROOT_PATH}/port/platforms/*.c

@@ -47,7 +47,7 @@
 #define RGBLIGHT_DEFAULT_SAT        0
 #define RGBLIGHT_DEFAULT_VAL        128
 #define RGBLIGHT_LED_COUNT          HW_WS2812_RGB_CNT
-#define RGBLIGHT_LIMIT_VAL          180
+#define RGBLIGHT_LIMIT_VAL          200
 #define RGBLIGHT_SAT_STEP           8
 #define RGBLIGHT_VAL_STEP           8
 #define RGBLIGHT_EFFECT_RGB_TEST

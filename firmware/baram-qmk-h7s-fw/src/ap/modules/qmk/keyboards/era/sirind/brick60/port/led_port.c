@@ -3,10 +3,8 @@
 #include "eeconfig.h"
 
 
-#define LED_TYPE_MAX_CH       2
-
-#define LED_ROW_START_INDEX 1
-#define LED_ROW_END_INDEX   30
+#define LED_TYPE_MAX_CH       1
+#define CAPS_LED_COUNT        30
 
 
 typedef union
@@ -39,7 +37,6 @@ static led_config_t led_config[LED_TYPE_MAX_CH];
 
 
 EECONFIG_DEBOUNCE_HELPER(led_caps,   EECONFIG_USER_LED_CAPS,   led_config[LED_TYPE_CAPS]);
-EECONFIG_DEBOUNCE_HELPER(led_row,    EECONFIG_USER_LED_ROW,    led_config[LED_TYPE_ROW]);
 
 
 
@@ -54,21 +51,11 @@ void led_init_ports(void)
     led_config[LED_TYPE_CAPS].hsv    = (HSV){HSV_GREEN};
     eeconfig_flush_led_caps(true);
   }
-  
-  eeconfig_init_led_row();
-  if (led_config[LED_TYPE_ROW].mode != 1)
-  {
-      led_config[LED_TYPE_ROW].mode   = 1;
-      led_config[LED_TYPE_ROW].enable = true;
-      led_config[LED_TYPE_ROW].hsv    = (HSV){HSV_BLUE};
-      eeconfig_flush_led_row(true);
-  }
 }
 
 void led_update_ports(led_t led_state)
 {
   uint32_t led_color;
-  uint32_t row_led_color;
   RGB      rgb_color;
 
 
@@ -78,21 +65,10 @@ void led_update_ports(led_t led_state)
     rgb_color = hsv_to_rgb(led_config[LED_TYPE_CAPS].hsv);
     led_color = WS2812_COLOR(rgb_color.r, rgb_color.g, rgb_color.b);
   }
-  ws2812SetColor(0, led_color);
-
-
-  row_led_color = WS2812_COLOR_OFF;
-  if (led_config[LED_TYPE_ROW].enable)
+  for (int i = 0; i < CAPS_LED_COUNT; i++)
   {
-      rgb_color = hsv_to_rgb(led_config[LED_TYPE_ROW].hsv);
-      row_led_color = WS2812_COLOR(rgb_color.r, rgb_color.g, rgb_color.b);
+      ws2812SetColor(i, led_color);
   }
-
-  for (int i = LED_ROW_START_INDEX; i <= LED_ROW_END_INDEX; i++)
-  {
-      ws2812SetColor(i, row_led_color);
-  }
-
 
   ws2812Refresh();  
 }

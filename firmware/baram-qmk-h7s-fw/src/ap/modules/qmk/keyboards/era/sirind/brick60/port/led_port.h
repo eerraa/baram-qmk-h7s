@@ -6,7 +6,6 @@
 enum
 {
     LED_TYPE_CAPS = 0,
-    LED_TYPE_ROW,
 };
 
 void led_init_ports(void);

@@ -4,7 +4,7 @@
 #define KBD_NAME                    "BRICK60"
 
 #define USB_VID                     0x4552
-#define USB_PID                     0x0001
+#define USB_PID                     0x0022
 
 
 // hw_def.h
@@ -13,8 +13,8 @@
 #define _USE_HW_WS2812
 #define     HW_WS2812_MAX_CH        30
 #define     HW_WS2812_CAPS          0
-#define     HW_WS2812_RGB           1
-#define     HW_WS2812_RGB_CNT       29
+#define     HW_WS2812_RGB           0
+#define     HW_WS2812_RGB_CNT       30
 
 
 // eeprom
@@ -28,7 +28,7 @@
 #define MATRIX_ROWS                 5
 #define MATRIX_COLS                 15
 
-#define DEBOUNCE                    20
+#define DEBOUNCE                    5
 
 
 // #define DEBUG_KEY_SEND

@@ -79,6 +79,7 @@ set (QMK_INC_DIR
   ${QMK_ROOT_PATH}/quantum/rgblight
 
   ${QMK_KEYBOARD_PATH}
+  ${QMK_KEYBOARD_PATH}/port
 )
 
 add_compile_definitions(DYNAMIC_KEYMAP_MACRO_DELAY=10)

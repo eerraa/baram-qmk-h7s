@@ -1,6 +1,7 @@
 #include "led_port.h"
 #include "ver_port.h"
 #include "sys_port.h"
+#include "polling_rate_port.h"
 
 
 void via_custom_value_command_kb(uint8_t *data, uint8_t length)
@@ -20,6 +21,12 @@ void via_custom_value_command_kb(uint8_t *data, uint8_t length)
   {
     via_qmk_version(data, length);
     return;
+  }
+  
+  if (*channel_id == id_qmk_polling_rate_channel)
+  {
+      via_qmk_polling_rate_command(data, length);
+      return;
   }
 
   if (*channel_id == id_qmk_system)
@@ -51,4 +58,3 @@ void via_custom_value_command_kb(uint8_t *data, uint8_t length)
   // Return the unhandled state
   *command_id = id_unhandled;
 }
-

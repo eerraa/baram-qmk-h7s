@@ -1,4 +1,5 @@
 #include "hw.h"
+#include "polling_rate.h" // polling_rate_init() 함수 호출시점을 조정하기 위함
 
 
 
@@ -50,6 +51,9 @@ bool hwInit(void)
   resetInit();    
   i2cInit();
   eepromInit();
+  
+  polling_rate_init(); // 함수 호출
+  
   #ifdef _USE_HW_QSPI
   qspiInit();
   #endif

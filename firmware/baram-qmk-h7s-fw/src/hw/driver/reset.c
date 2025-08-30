@@ -107,6 +107,14 @@ void resetToBoot(void)
 
 void resetToReset(void)
 {
+#ifdef _USE_HW_CACHE
+  // 데이터 캐시의 내용을 메모리에 쓰고 캐시를 무효화합니다.
+  SCB_CleanInvalidateDCache();
+  // 명령어 캐시를 무효화합니다.
+  SCB_InvalidateICache();
+#endif
+  
+  // 시스템 리셋을 수행합니다.
   HAL_NVIC_SystemReset();
 }
 

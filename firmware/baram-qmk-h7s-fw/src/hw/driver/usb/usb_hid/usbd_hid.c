@@ -49,6 +49,8 @@
 #include "qbuffer.h"
 #include "report.h"
 
+#include "reset.h"        // resetToReset() 함수를 사용하기 위함
+#include "polling_rate.h" // polling_rate_init() 함수를 사용하기 위함
 
 #if HW_USB_LOG == 1
 #define logDebug(...)                              \
@@ -65,7 +67,7 @@
 #define HID_KEYBOARD_REPORT_SIZE (HW_KEYS_PRESS_MAX + 2U)
 #define KEY_TIME_LOG_MAX         32
 
-
+//-- 함수 프로토타입 선언
 static uint8_t USBD_HID_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx);
 static uint8_t USBD_HID_DeInit(USBD_HandleTypeDef *pdev, uint8_t cfgidx);
 static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *req);
@@ -92,10 +94,11 @@ static void usbHidMeasureRateTime(void);
 static bool usbHidUpdateWakeUp(USBD_HandleTypeDef *pdev);
 static void usbHidInitTimer(void);
 
+//-- 외부 공개 함수
+bool usbHidIsCliStatusEnabled(void);
+uint32_t usbHidGetActualRate(void);
 
-
-
-
+//-- 구조체 선언
 typedef struct
 {
   uint8_t  buf[HID_KEYBOARD_REPORT_SIZE];
@@ -111,6 +114,12 @@ typedef struct
   uint8_t len;
   uint8_t buf[HID_EXK_EP_SIZE];
 } exk_report_info_t;
+
+// 내부 측정용 (static)
+static uint32_t data_in_cnt = 0;
+static uint32_t data_in_rate = 0;
+static uint32_t sof_cnt = 0;         // usbhid rate의 상세 디버깅용 카운터
+static uint32_t sof_1s_cnt = 0;      // 1초간 실제 폴링레이트 측정용 카운터
 
 static USBD_SetupReqTypedef ep0_req;
 static uint8_t ep0_req_buf[USB_MAX_EP0_SIZE];
@@ -131,7 +140,14 @@ static qbuffer_t              report_exk_q;
 static exk_report_info_t      report_exk_buf[128];
 __ALIGN_BEGIN  static uint8_t hid_buf_exk[HID_EXK_EP_SIZE] __ALIGN_END = {0,};
 
+// 전역 변수 선언
+bool cli_status_enabled = false;
+uint32_t actual_polling_rate = 0; 
 
+// 자동 안정성 모드를 위한 static 변수들
+static uint32_t instability_counter = 0;
+static uint32_t stability_counter = 0; // 모듈 내부에서만 사용
+#define INSTABILITY_THRESHOLD 3 // 3초 연속 성능 저하 시 강등
 
 USBD_ClassTypeDef USBD_HID =
 {
@@ -469,9 +485,6 @@ static uint8_t HIDInEpAdd = HID_EPIN_ADDR;
 extern USBD_HandleTypeDef USBD_Device;
 static TIM_HandleTypeDef htim2;
 
-static uint32_t sof_cnt = 0;
-
-
 /**
   * @brief  USBD_HID_Init
   *         Initialize the HID interface
@@ -537,6 +550,8 @@ static uint8_t USBD_HID_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
   if (is_first)
   {
     is_first = false;
+    
+    //polling_rate_init(); 주석처리함, hwInit() 함수에서 이미 호출됨
 
     qbufferCreateBySize(&report_q, (uint8_t *)report_buf, sizeof(report_info_t), 128); 
     qbufferCreateBySize(&via_report_q, (uint8_t *)via_report_q_buf, sizeof(via_report_info_t), 128); 
@@ -927,9 +942,6 @@ static uint8_t *USBD_HID_GetOtherSpeedCfgDesc(uint16_t *length)
 }
 #endif /* USE_USBD_COMPOSITE  */
 
-static uint32_t data_in_cnt = 0;
-static uint32_t data_in_rate = 0;
-
 static bool     rate_time_req = false;
 static uint32_t rate_time_pre = 0;
 static uint32_t rate_time_us  = 0;
@@ -977,7 +989,6 @@ static uint8_t USBD_HID_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum)
   
   data_in_cnt++;
 
-
   usbHidMeasureRateTime();
 
   return (uint8_t)USBD_OK;
@@ -1013,9 +1024,13 @@ static uint8_t USBD_HID_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
   return (uint8_t)USBD_OK;
 }
 
+static uint32_t last_sof_time_ms = 0; // SOF 수신 시간을 기록할 변수
+
 uint8_t USBD_HID_SOF(USBD_HandleTypeDef *pdev)
 {
-  usbHidMeasurePollRate();
+  last_sof_time_ms = millis(); // <<< SOF 수신 시 현재 시간 기록
+  sof_1s_cnt++; // SOF가 들어올 때마다 카운터만 증가
+  //usbHidMeasurePollRate(); // <--- 이 호출은 삭제합니다.
 
   if (qbufferAvailable(&via_report_q) && (millis()-via_report_pre_time) >= via_report_time)
   {
@@ -1126,24 +1141,29 @@ bool usbHidSendReportEXK(uint8_t *p_data, uint16_t length)
 
 void usbHidMeasurePollRate(void)
 {
-  static uint32_t cnt = 0; 
+  static uint32_t pre_time = 0;
 
-
-  rate_time_sof_pre = micros();
-  if (cnt >= 8000)
+  // 1초마다 실행
+  if (millis() - pre_time >= 1000)
   {
-    cnt = 0;
+    pre_time = millis();
+    
+    // 1. 실제 폴링레이트 계산 (SOF 기반)
+    actual_polling_rate = sof_1s_cnt;
+    sof_1s_cnt = 0;
+
+    // 2. 리포트 전송률 및 Latency 통계 계산 (기존 로직 유지)
     data_in_rate = data_in_cnt;
     rate_time_min = rate_time_min_check; 
     rate_time_max = rate_time_max_check;     
-    rate_time_avg = rate_time_sum / (data_in_cnt + 1);
+    rate_time_avg = (data_in_cnt > 0) ? (rate_time_sum / data_in_cnt) : 0; // 0으로 나누기 방지
+    
+    // 3. 다음 측정을 위해 카운터 리셋
     data_in_cnt = 0;
-
+    rate_time_sum = 0;
     rate_time_min_check = 0xFFFF; 
     rate_time_max_check = 0;     
-    rate_time_sum = 0;
-  }  
-  cnt++;  
+  }
 }
 
 void usbHidMeasureRateTime(void)
@@ -1311,10 +1331,74 @@ volatile uint32_t timer_end = 0;
 
 void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 {
+  // 1. 주기적인 성능 통계 업데이트 (내부적으로 1초마다 실행)
+  usbHidMeasurePollRate(); 
+
+  // 2. 자동 안정성 모드 로직 (1초에 한 번만 실행되도록 제어)
+  static uint32_t last_check_time = 0;
+  if (millis() - last_check_time >= 1000)
+  {
+      last_check_time = millis();
+
+      uint8_t current_mode = polling_rate_get();
+      uint32_t actual_rate = usbHidGetActualRate();
+
+      // 목표 성능치 정의 (약 80%를 기준으로 함)
+      const uint32_t TARGET_RATE_8K = 7000;
+      const uint32_t TARGET_RATE_4K = 3500;
+
+      // 2-1. 완전 연결 끊김 감지 (가장 우선 순위)
+      if (millis() - last_sof_time_ms > 500)
+      {
+          if (current_mode == POLLING_RATE_8K) {
+              polling_rate_set(POLLING_RATE_4K);
+              resetToReset();
+          } else if (current_mode == POLLING_RATE_4K) {
+              polling_rate_set(POLLING_RATE_1K);
+              resetToReset();
+          }
+          return; // 재부팅하므로 아래 로직 실행 안 함
+      }
+      
+      // 2-2. 성능 저하 감지 (Step-Down)
+      bool is_unstable = false;
+      if ((current_mode == POLLING_RATE_8K && actual_rate > 0 && actual_rate < TARGET_RATE_8K) ||
+          (current_mode == POLLING_RATE_4K && actual_rate > 0 && actual_rate < TARGET_RATE_4K)) {
+          is_unstable = true;
+      }
+
+      if (is_unstable) {
+          instability_counter++;
+          stability_counter = 0; // 불안정하므로 안정성 카운터 리셋
+          if (instability_counter >= INSTABILITY_THRESHOLD) {
+              if (current_mode == POLLING_RATE_8K) {
+                  polling_rate_set(POLLING_RATE_4K);
+                  resetToReset();
+              } else if (current_mode == POLLING_RATE_4K) {
+                  polling_rate_set(POLLING_RATE_1K);
+                  resetToReset();
+              }
+              instability_counter = 0;
+          }
+      } else {
+          instability_counter = 0; // 안정 상태이면 불안정성 카운터 리셋
+
+          // 2-3. 안정성 카운터 증가 (수동 복구를 위함)
+          if (current_mode != POLLING_RATE_8K) {
+              if (stability_counter < STABILITY_THRESHOLD) {
+                  stability_counter++;
+              }
+          } else {
+            stability_counter = 0; // 이미 최고 성능이면 리셋
+          }
+      }
+  }
+
+  // 3. 기존의 리포트 큐 처리 로직들
   timer_cnt++;
   timer_end = micros()-rate_time_sof_pre;
-
   sof_cnt++;
+
   if (qbufferAvailable(&report_q) > 0)
   {
     if (p_hhid->state == USBD_HID_IDLE)
@@ -1340,8 +1424,22 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
       USBD_HID_SendReportEXK((uint8_t *)hid_buf_exk, report_info.len);
     }
   }
+}
 
-  return;
+// Getter 함수 구현부
+bool usbHidIsCliStatusEnabled(void)
+{
+  return cli_status_enabled;
+}
+
+uint32_t usbHidGetActualRate(void)
+{
+  return actual_polling_rate;
+}
+
+uint32_t usbHidGetStabilityCounter(void)
+{
+  return stability_counter;
 }
 
 #ifdef _USE_HW_CLI
@@ -1351,6 +1449,46 @@ void cliCmd(cli_args_t *args)
 
   if (args->argc == 1 && args->isStr(0, "info") == true)
   {
+    cliPrintf("USB HID Interface for QMK\r\n");
+    ret = true;
+  }
+
+  if (args->argc >= 1 && args->isStr(0, "status") == true)
+  {
+    if (args->argc == 2 && args->isStr(1, "on"))
+    {
+      cli_status_enabled = true;
+      cliPrintf("Real-time status logging: ON\r\n");
+    }
+    else if (args->argc == 2 && args->isStr(1, "off"))
+    {
+      cli_status_enabled = false;
+      cliPrintf("Real-time status logging: OFF\r\n");
+    }
+    else
+    {
+      // --- 'status' 명령어 출력 강화 ---
+      uint8_t config_mode = polling_rate_get();
+      const char *config_str;
+      switch(config_mode)
+      {
+        case POLLING_RATE_8K: config_str = "8000 Hz"; break;
+        case POLLING_RATE_4K: config_str = "4000 Hz"; break;
+        case POLLING_RATE_1K: config_str = "1000 Hz"; break;
+        default:              config_str = "Unknown"; break;
+      }
+      uint32_t actual_rate = usbHidGetActualRate();
+      uint32_t sof_delta = millis() - last_sof_time_ms;
+
+      cliPrintf("--- Polling Rate Status ---\r\n");
+      cliPrintf(" Config : %s\r\n", config_str);
+      cliPrintf(" Actual : %d Hz\r\n", actual_rate);
+      cliPrintf(" SOF dT : %d ms\r\n", sof_delta); // 마지막 SOF 수신 후 경과 시간
+      cliPrintf("---------------------------\r\n");
+      cliPrintf(" Instability Cnt : %d / %d\r\n", instability_counter, INSTABILITY_THRESHOLD);
+      cliPrintf(" Stability Cnt   : %d / %d\r\n", stability_counter, STABILITY_THRESHOLD);
+      cliPrintf("---------------------------\r\n");
+    }
     ret = true;
   }
 
@@ -1359,9 +1497,7 @@ void cliCmd(cli_args_t *args)
     uint32_t pre_time;
     uint32_t pre_time_key;
     uint32_t key_send_cnt = 0;
-
     memset(rate_his_buf, 0, sizeof(rate_his_buf));
-
     pre_time = millis();
     pre_time_key = millis();
     while(cliKeepLoop())
@@ -1369,33 +1505,26 @@ void cliCmd(cli_args_t *args)
       if (millis()-pre_time_key >= 2 && key_send_cnt < 50)
       {
         uint8_t buf[HID_KEYBOARD_REPORT_SIZE];
-
         memset(buf, 0, HID_KEYBOARD_REPORT_SIZE);
-
-        pre_time_key = millis();    
-        usbHidSendReport(buf, HID_KEYBOARD_REPORT_SIZE);      
+        pre_time_key = millis();
+        usbHidSendReport(buf, HID_KEYBOARD_REPORT_SIZE);
         key_send_cnt++;
       }
-
-      
       if (millis()-pre_time >= 1000)
       {
         pre_time = millis();
-        cliPrintf("hid rate %d Hz, avg %4d us, max %4d us, min %d us, %d, %d\n", 
+        cliPrintf("hid rate %d Hz, avg %4d us, max %4d us, min %d us, %d, %d\r\n",
           data_in_rate,
           rate_time_avg,
           rate_time_max,
           rate_time_min,
           rate_time_sof,
-          timer_end
-          ); 
-        
+          timer_end);
         for (int i=0; i<10; i++)
         {
-          cliPrintf("%d us\n",key_time_log[i]);
+          cliPrintf("%d us\r\n",key_time_log[i]);
         }
-
-        cliPrintf("sof/tim cnt : %d/%d\n", sof_cnt, timer_cnt);
+        cliPrintf("sof/tim cnt : %d/%d\r\n", sof_cnt, timer_cnt);
         timer_cnt = 0;
         key_send_cnt = 0;
         sof_cnt=0;
@@ -1406,7 +1535,7 @@ void cliCmd(cli_args_t *args)
     {
       for (int i=0; i<100; i++)
       {
-        cliPrintf("%d %d\n", i, rate_his_buf[i]);
+        cliPrintf("%d %d\r\n", i, rate_his_buf[i]);
       }
     }
     ret = true;
@@ -1425,60 +1554,42 @@ void cliCmd(cli_args_t *args)
     uint16_t time_max[3] = {0, 0, 0};
     uint16_t time_min[3] = {0xFFFF, 0xFFFF, 0xFFFF};
     uint16_t time_sum[3] = {0, 0, 0};
-
-
     for (int i = 0; i < key_time_cnt; i++)
     {
       if (key_time_cnt == KEY_TIME_LOG_MAX)
         index = (key_time_idx + i) % KEY_TIME_LOG_MAX;
       else
         index = i;
-
-      cliPrintf("%2d: %3d us, raw : %3d us, %d\n",
-                i,
-                key_time_log[index],
-                key_time_raw_log[index],
-                key_time_pre_log[index]);
-
+      cliPrintf("%2d: %3d us, raw : %3d us, %d\r\n", i, key_time_log[index], key_time_raw_log[index], key_time_pre_log[index]);
       for (int j=0; j<3; j++)
       {
         uint16_t data;
-
-        if (j == 0)
-          data = key_time_log[index]; 
-        else if (j == 1)
-          data = key_time_raw_log[index]; 
-        else
-          data = key_time_pre_log[index];          
-
+        if (j == 0) data = key_time_log[index];
+        else if (j == 1) data = key_time_raw_log[index];
+        else data = key_time_pre_log[index];
         time_sum[j] += data;
-        if (data > time_max[j])
-          time_max[j] = data;
-        if (data < time_min[j])
-          time_min[j] = data;
+        if (data > time_max[j]) time_max[j] = data;
+        if (data < time_min[j]) time_min[j] = data;
       }
     }
-
-    cliPrintf("\n");
+    cliPrintf("\r\n");
     if (key_time_cnt > 0)
     {
-      cliPrintf("avg : %3d us %3d us %3d us\n",
-                time_sum[0] / key_time_cnt,
-                time_sum[1] / key_time_cnt,
-                time_sum[2] / key_time_cnt);
-      cliPrintf("max : %3d us %3d us %3d us\n", time_max[0], time_max[1], time_max[2]);
-      cliPrintf("min : %3d us %3d us %3d us\n", time_min[0], time_min[1], time_min[2]);
+      cliPrintf("avg : %3d us %3d us %3d us\r\n", time_sum[0] / key_time_cnt, time_sum[1] / key_time_cnt, time_sum[2] / key_time_cnt);
+      cliPrintf("max : %3d us %3d us %3d us\r\n", time_max[0], time_max[1], time_max[2]);
+      cliPrintf("min : %3d us %3d us %3d us\r\n", time_min[0], time_min[1], time_min[2]);
     }
     ret = true;
   }
 
   if (ret == false)
   {
-    cliPrintf("usbhid info\n");
-    cliPrintf("usbhid rate\n");
-    cliPrintf("usbhid rate his\n");
-    cliPrintf("usbhid log\n");
-    cliPrintf("usbhid log clear\n");
+    cliPrintf("usbhid info\r\n");
+    cliPrintf("usbhid status [on|off]\r\n");
+    cliPrintf("usbhid rate\r\n");
+    cliPrintf("usbhid rate his\r\n");
+    cliPrintf("usbhid log\r\n");
+    cliPrintf("usbhid log clear\r\n");
   }
 }
 #endif

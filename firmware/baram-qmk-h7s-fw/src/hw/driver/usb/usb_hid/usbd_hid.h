@@ -177,6 +177,14 @@ void usbHidSetStatusLed(uint8_t led_bits);
 }
 #endif
 
+// CLI 상태 로깅을 위한 함수 선언
+bool usbHidIsCliStatusEnabled(void);
+uint32_t usbHidGetActualRate(void);
+
+// 자동 안정성 모드를 위한 API 추가
+#define STABILITY_THRESHOLD 60 // 60초(1분) 연속 안정 시 복구 가능 상태로 전환
+uint32_t usbHidGetStabilityCounter(void);
+
 #endif  /* __USB_HID_H */
 /**
   * @}

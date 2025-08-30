@@ -230,6 +230,31 @@
           ]
         },
         {
+          "label": "Polling Rate",
+          "content": [
+            {
+              "label": "Target Mode",
+              "type": "dropdown",
+              "content": ["id_qmk_polling_rate_pending", 13, 1],
+              "options": [
+                ["8000 Hz (Performance)", 0],
+                ["4000 Hz (Balanced)", 1],
+                ["1000 Hz (Compatible)", 2]
+              ]
+            },
+            {
+              "label": "System Status",
+              "type": "keycode",
+              "content": ["id_qmk_polling_rate_status_kc", 13, 3]
+            },
+            {
+              "label": "Apply and Reboot",
+              "type": "toggle",
+              "content": ["id_qmk_polling_rate_apply", 13, 2]
+            }
+          ]
+        },
+        {
           "label": "BOOT",
           "content": [
             {

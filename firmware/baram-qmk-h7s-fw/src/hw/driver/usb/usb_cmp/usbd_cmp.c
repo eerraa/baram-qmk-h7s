@@ -33,6 +33,7 @@
   */
 
 #include "usbd_cmp.h"
+#include "polling_rate.h"
 
 
 #ifdef USE_USBD_COMPOSITE
@@ -833,7 +834,15 @@ static void  USBD_CMPSIT_HIDKeyboardDesc(USBD_HandleTypeDef *pdev, uint32_t pCon
   static USBD_IfDescTypeDef *pIfDesc;
   static USBD_EpDescTypeDef *pEpDesc;
   static USBD_HIDDescTypeDef *pHidKeyboardDesc;
-
+  
+  // 현재 설정된 폴링레이트에 맞는 bInterval 값을 가져옵니다.
+  // High Speed 모드일 때만 적용하고, Full Speed는 기본값(1KHz)을 유지합니다.
+  uint8_t hs_binterval = HID_HS_BINTERVAL; // 기본값 8KHz
+  if (speed == USBD_SPEED_HIGH)
+  {
+    hs_binterval = get_bInterval_for_current_mode();
+  }
+  
   // KEYBOARD 
   //
   /* Append HID Interface descriptor to Configuration descriptor */
@@ -860,7 +869,7 @@ static void  USBD_CMPSIT_HIDKeyboardDesc(USBD_HandleTypeDef *pdev, uint32_t pCon
   __USBD_CMPSIT_SET_EP(pdev->tclasslist[pdev->classId].Eps[0].add,
                        USBD_EP_TYPE_INTR, 
                        HID_EPIN_SIZE | (2<<11),
-                       HID_HS_BINTERVAL, 
+                       hs_binterval, 
                        HID_FS_BINTERVAL);
 
 
@@ -925,7 +934,7 @@ static void  USBD_CMPSIT_HIDKeyboardDesc(USBD_HandleTypeDef *pdev, uint32_t pCon
 
   /* Append Endpoint descriptor to Configuration descriptor */
   __USBD_CMPSIT_SET_EP(pdev->tclasslist[pdev->classId].Eps[3].add, USBD_EP_TYPE_INTR, HID_EXK_EP_SIZE, \
-                       HID_HS_BINTERVAL, HID_FS_BINTERVAL);
+                       hs_binterval, HID_FS_BINTERVAL);
 
   /* Update Config Descriptor and IAD descriptor */
   ((USBD_ConfigDescTypeDef *)pConf)->bNumInterfaces += 1U;

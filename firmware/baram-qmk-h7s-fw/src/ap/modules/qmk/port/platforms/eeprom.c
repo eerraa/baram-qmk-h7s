@@ -14,6 +14,7 @@ static uint8_t        eeprom_buf[TOTAL_EEPROM_BYTE_COUNT];
 static qbuffer_t      write_q;
 static eeprom_write_t write_buf[EEPROM_WRITE_Q_BUF_MAX];
 static bool           is_req_clean = false;
+static bool           is_req_reset = false; // 리셋 요청 플래그 추가
 
 
 void eeprom_init(void)
@@ -48,7 +49,15 @@ void eeprom_task(void)
 
   if (is_req_clean)
   {
+    is_req_clean = false; // 플래그를 먼저 내림
     eeconfig_disable();
+    soft_reset_keyboard();
+  }
+  
+  if (is_req_reset) // 추가
+  {
+    is_req_reset = false; // 플래그를 먼저 내림
+    eeprom_update_byte(EECONFIG_UNUSED, eeprom_read_byte(EECONFIG_UNUSED)); // 지연발생
     soft_reset_keyboard();
   }
 }
@@ -56,6 +65,11 @@ void eeprom_task(void)
 void eeprom_req_clean(void)
 {
   is_req_clean = true;
+}
+
+void eeprom_req_reset(void) // 추가
+{
+  is_req_reset = true;
 }
 
 uint8_t  eeprom_read_byte(const uint8_t *addr)

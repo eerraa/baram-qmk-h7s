@@ -6,7 +6,7 @@
 #include QMK_KEYMAP_CONFIG_H
 
 
-#define _DEF_FIRMWATRE_VERSION      "V250627R1"
+#define _DEF_FIRMWATRE_VERSION      "V250830R2"
 #define _DEF_BOARD_NAME             "BARAM-QMK-H7S-FW"
 
 
@@ -24,7 +24,7 @@
 #define      HW_UART_MAX_CH         2
 #define      HW_UART_CH_SWD         _DEF_UART1
 #define      HW_UART_CH_USB         _DEF_UART2
-#define      HW_UART_CH_CLI         HW_UART_CH_SWD
+#define      HW_UART_CH_CLI         HW_UART_CH_USB
 
 #define _USE_HW_CLI
 #define      HW_CLI_CMD_LIST_MAX    32
@@ -37,7 +37,7 @@
 #define      HW_CLI_GUI_HEIGHT      24
 
 #define _USE_HW_LOG
-#define      HW_LOG_CH              HW_UART_CH_SWD
+#define      HW_LOG_CH              HW_UART_CH_USB
 #define      HW_LOG_BOOT_BUF_MAX    2048
 #define      HW_LOG_LIST_BUF_MAX    4096
 

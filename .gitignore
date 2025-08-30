@@ -12,3 +12,6 @@ _deps
 CMakeUserPresets.json
 /firmware/baram-qmk-h7s-boot/build
 /firmware/baram-qmk-h7s-fw/build
+firmware/baram-qmk-h7s-fw/project_structure_for_ai.txt
+firmware/baram-qmk-h7s-fw/src/ap/modules/qmk/file_contents_summary.txt
+firmware/baram-qmk-h7s-fw/src/ap/modules/qmk/keyboards/era/sirind/brick60/file_contents_summary.txt

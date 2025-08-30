@@ -2,6 +2,7 @@
 #include "ver_port.h"
 #include "sys_port.h"
 #include "polling_rate_port.h"
+#include "via.h"       
 
 
 void via_custom_value_command_kb(uint8_t *data, uint8_t length)
@@ -47,6 +48,7 @@ void via_custom_value_command_kb(uint8_t *data, uint8_t length)
     return;
   }
 #endif
+
 #ifdef KKUK_ENABLE
   if (*channel_id == id_qmk_kkuk)
   {

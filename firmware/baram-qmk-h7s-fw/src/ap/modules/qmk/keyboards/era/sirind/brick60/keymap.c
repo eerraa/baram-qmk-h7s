@@ -1,9 +1,9 @@
 // Copyright 2024 Hyojin Bak (@eerraa)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+
 #include QMK_KEYBOARD_H
 #include "polling_rate_port.h" // enum 정의가 이 안에 있음
-#include "keymap_introspection.h" // 추가
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [0] = {
@@ -21,19 +21,6 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         { KC_TRNS, KC_TRNS, KC_TRNS, _______, _______, _______, _______, KC_TRNS, _______, _______, _______, _______, KC_TRNS, KC_TRNS, KC_TRNS }
     }
 };
-
-const char *keymap_introspection_get_name(uint16_t keycode) {
-    switch (keycode) {
-        case ST_OPTIMAL:
-            return "Optimal Performance";
-        case ST_STABILIZING:
-            return "Stabilizing...";
-        case ST_READY:
-            return "Ready to upgrade";
-        default:
-            return NULL; 
-    }
-}
 
 void keyboard_post_init_kb(void) {
     polling_rate_port_init(); // VIA 핸들러 초기화

@@ -243,11 +243,6 @@
               ]
             },
             {
-              "label": "System Status",
-              "type": "keycode",
-              "content": ["id_qmk_polling_rate_status_kc", 13, 3]
-            },
-            {
               "label": "Apply and Reboot",
               "type": "toggle",
               "content": ["id_qmk_polling_rate_apply", 13, 2]

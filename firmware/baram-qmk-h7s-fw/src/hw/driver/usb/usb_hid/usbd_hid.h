@@ -193,4 +193,3 @@ uint32_t usbHidGetStabilityCounter(void);
 /**
   * @}
   */
-

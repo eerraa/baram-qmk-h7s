@@ -78,14 +78,15 @@ void cliUpdate(void)
     }
     
     uint32_t current_rate = usbHidGetActualRate();
-    uint32_t stab_cnt = usbHidGetStabilityCounter();
+    uint32_t stab_cnt     = usbHidGetStabilityCounter();
+    uint32_t sof_dt_ms    = usbHidGetSofDtMs();   // [V1.8.2] SOF delta 시간(ms)
 
-    // 한 줄에 모든 정보를 압축하여 출력
-    cliPrintf("Rate[C:%s A:%-4d] Stab[%-2d/%d]\r\n", 
-              config_str, 
-              current_rate, 
-              stab_cnt, 
-              STABILITY_THRESHOLD);
+    // [V1.8.1] SOF dT(ms) 추가
+    cliPrintf("Rate[C:%s A:%lu] Stab[%lu] SOF dT:%lums\r\n",
+              config_str,
+              (unsigned long)current_rate,
+              (unsigned long)stab_cnt,
+              (unsigned long)sof_dt_ms);
   }
 }
 

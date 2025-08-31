@@ -104,24 +104,48 @@ typedef struct
   uint32_t data_in_rate;
   uint32_t poll_rate_measure_cnt;
 
+  // [V1.8.1] 첫 1초 프라임 여부
+  bool     window_primed; // [V1.8.1] 첫 1초 집계만 하고 출력 금지
+
   // Latency 측정 관련
   bool     rate_time_req;
-  uint32_t rate_time_pre;
+  uint64_t rate_time_pre;           // [V1.8.1] 64-bit로 승격 (wrap 안전)
   uint32_t rate_time_us;
   uint32_t rate_time_sum;
-  uint32_t rate_time_min_check;
+  uint32_t rate_time_min_check;     // [V1.8.1] 오타 수정 (기존 rate_ti1me_min_check)
   uint32_t rate_time_max_check;
   uint32_t rate_time_avg;
   uint32_t rate_time_max;
   uint32_t rate_time_min;
 
-  // SOF/Timer 동기화 측정 관련
+  // [V1.8.1] 동일-틱/무효 샘플 카운팅
+  uint32_t same_tick_cnt;           // 같은 8kHz 틱에서 시작·종료된 샘플
+  uint32_t invalid_samples_cnt;     // 임계치(예: <20us) 미만으로 제외된 샘플
+
+  // [V1.8.1] 기대 폴링 간격(진단용)
+  uint32_t expected_interval_us;
+
+  // [V1.8.1] Δt_in(연속 DataIn 간격) 통계 -------------------------------
+  uint64_t din_prev_time_us;        // 직전 DataIn 완료 시각(us)
+  uint32_t din_interval_us;         // 가장 최근 Δt_in
+  uint32_t din_interval_sum;        // 윈도우 합
+  uint32_t din_interval_min_check;  // 윈도우 최소
+  uint32_t din_interval_max_check;  // 윈도우 최대
+  uint32_t din_interval_avg;        // 출력용 평균
+  uint32_t din_interval_min;        // 출력용 최소
+  uint32_t din_interval_max;        // 출력용 최대
+  uint32_t din_interval_cnt;        // 윈도우 유효 샘플 수
+  uint16_t din_his_buf[100];        // Δt_in 히스토그램(10us/bin, 0~990us)
+  uint32_t din_invalid_cnt;         // 비정상(예: <20us) 샘플 수
+  bool     din_discard_next;        // [V1.8.2] 윈도우 경계 직후 첫 Δt_in은 버림
+
+  // SOF/Timer 동기화 측정 관련 (버스 상태 모니터링 전용)
   uint32_t sof_cnt;
   uint32_t timer_cnt;
   uint32_t sof_interval_us;
   uint32_t sof_interval_max_us;
 
-  // Histogram
+  // Histogram (전송 지연)
   uint16_t rate_his_buf[100];
 } usb_hid_rate_debug_t;
 
@@ -130,6 +154,10 @@ static void usbHidResetDebugCounters(void);
 static void usbHidMeasurePollRate(void);
 static void usbHidMeasureRateTime(void);
 
+// [V1.8.1] 동일-틱 가드를 위한 tick id
+static volatile uint32_t g_usb_tick_id = 0;     // 8kHz 콜백마다 증가
+static uint32_t          rate_pre_tick_id = 0;  // 전송 시작 시점의 tick 스냅샷
+static uint32_t          key_pre_tick_id  = 0;  // 키 로깅 시작 시점의 tick 스냅샷
 
 //-- 외부 공개 함수
 bool usbHidIsCliStatusEnabled(void);
@@ -154,7 +182,7 @@ typedef struct
 
 
 // 안정성 측정 및 공용 변수들
-static uint32_t sof_1s_cnt = 0;      // 1초간 실제 폴링레이트 측정용 카운터
+static uint32_t sof_1s_cnt = 0;       // 1초간 실제 폴링레이트 측정용 카운터
 static uint32_t last_sof_time_ms = 0; // SOF 수신 시간을 기록할 변수
 static uint32_t instability_counter = 0;
 static uint32_t stability_counter = 0; // 모듈 내부에서만 사용
@@ -180,7 +208,7 @@ static exk_report_info_t      report_exk_buf[128];
 __ALIGN_BEGIN  static uint8_t hid_buf_exk[HID_EXK_EP_SIZE] __ALIGN_END = {0,};
 
 static bool     key_time_req = false;
-static uint32_t key_time_pre;
+static uint64_t key_time_pre;                // [V1.8.1] 64-bit로 승격
 static uint32_t key_time_end;
 static uint32_t key_time_idx = 0;
 static uint32_t key_time_cnt = 0;
@@ -491,6 +519,24 @@ extern USBD_HandleTypeDef USBD_Device;
 // [V1.5.0] 8kHz 콜백으로 호출될 함수 프로토타입
 static void usbHidTimerCallback(void);
 
+// [V1.8.1] 기대 폴링 간격 계산 유틸
+static uint32_t usbHidExpectedIntervalUs(void)
+{
+  USBD_HandleTypeDef *pdev = &USBD_Device;
+  uint8_t b = pdev->ep_in[HIDInEpAdd & 0x0FU].bInterval;
+  if (b == 0) b = 1;
+  if (pdev->dev_speed == USBD_SPEED_HIGH)
+  {
+    // HS: 125us * 2^(bInterval-1)
+    return 125U * (1U << (b - 1U));
+  }
+  else
+  {
+    // FS: bInterval * 1ms
+    return (uint32_t)b * 1000U;
+  }
+}
+
 /**
   * @brief  USBD_HID_Init
   *         Initialize the HID interface
@@ -570,6 +616,9 @@ static uint8_t USBD_HID_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
     // usbHidInitTimer(); // [V1.5.0] 삭제: hwInit()에서 microsInit()이 호출됨
     microsSetCallback(usbHidTimerCallback); // [V1.5.0] 8kHz 콜백 함수 등록
   }
+
+  // [V1.8.1] 기대 폴링 간격(진단용) 초기화
+  rate_debug.expected_interval_us = usbHidExpectedIntervalUs();
 
   return (uint8_t)USBD_OK;
 }
@@ -889,7 +938,7 @@ uint8_t *USBD_HID_GetUsrStrDescriptor(struct _USBD_HandleTypeDef *pdev, uint8_t 
 
 #ifndef USE_USBD_COMPOSITE
 /**
-  * @brief  USBD_HID_GetCfgFSDesc
+  * @brief  USBD_HID_GetFSCfgDesc
   *         return FS configuration descriptor
   * @param  speed : current device speed
   * @param  length : pointer data length
@@ -909,7 +958,7 @@ static uint8_t *USBD_HID_GetFSCfgDesc(uint16_t *length)
 }
 
 /**
-  * @brief  USBD_HID_GetCfgHSDesc
+  * @brief  USBD_HID_GetHSCfgDesc
   *         return HS configuration descriptor
   * @param  speed : current device speed
   * @param  length : pointer data length
@@ -971,6 +1020,32 @@ static uint8_t USBD_HID_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum)
   rate_debug.data_in_cnt++;
 
   usbHidMeasureRateTime();
+  
+  uint64_t now_us = micros64();
+
+  if (rate_debug.din_discard_next || rate_debug.din_prev_time_us == 0) {
+    // 윈도우가 막 바뀌었거나(경계), 아직 기준이 없으면 DT 계산을 생략하고 기준만 세팅
+    rate_debug.din_prev_time_us = now_us;     // 기준만 갱신
+    rate_debug.din_discard_next = false;      // [V1.8.2] 다음 샘플부터 정상 집계
+  } else {
+    uint32_t dt = (uint32_t)(now_us - rate_debug.din_prev_time_us);
+    if (dt >= 20U) {                           // 너무 짧은 비정상 샘플 필터
+      rate_debug.din_interval_us  = dt;
+      rate_debug.din_interval_sum += dt;
+      rate_debug.din_interval_cnt++;
+      if (rate_debug.din_interval_min_check == 0 || dt < rate_debug.din_interval_min_check)
+        rate_debug.din_interval_min_check = dt;
+      if (dt > rate_debug.din_interval_max_check)
+        rate_debug.din_interval_max_check = dt;
+      uint32_t idx = constrain(dt/10U, 0U, 99U);
+      if (rate_debug.din_his_buf[idx] < 0xFFFF) {
+        rate_debug.din_his_buf[idx]++;
+      }
+    } else {
+      rate_debug.din_invalid_cnt++;
+    }
+    rate_debug.din_prev_time_us = now_us;     // 다음 Δt_in을 위한 기준 갱신
+  }
 
   return (uint8_t)USBD_OK;
 }
@@ -1077,11 +1152,13 @@ bool usbHidSendReport(uint8_t *p_data, uint16_t length)
     memcpy(hid_buf, p_data, length);
     if (USBD_HID_SendReport((uint8_t *)hid_buf, HID_KEYBOARD_REPORT_SIZE))
     {
-      // [V1.8.0] 측정 기준을 SOF 시각으로 정렬 (8kHz 위상 영향 제거)
-      key_time_pre = (uint32_t)timer_sof_start_time;
+      // [V1.8.1] SOF 시각 대신 실제 전송 시각으로 기준 정렬(위상영향 제거)
+      key_time_pre = micros64();
+      key_pre_tick_id = g_usb_tick_id;           // [V1.8.1] 동일-틱 가드용 스냅샷
       key_time_req = true;
-      // [V1.2.0]+[V1.8.0]
-      rate_debug.rate_time_pre = (uint32_t)timer_sof_start_time;
+
+      rate_debug.rate_time_pre = micros64();     // [V1.8.1] 64-bit pre 타임스탬프
+      rate_pre_tick_id = g_usb_tick_id;          // [V1.8.1] 동일-틱 가드용 스냅샷
       rate_debug.rate_time_req = true;
     }
     else
@@ -1127,73 +1204,127 @@ bool usbHidSendReportEXK(uint8_t *p_data, uint16_t length)
 
 void usbHidMeasurePollRate(void)
 {
+  // [V1.8.1] 1초 윈도우는 8kHz 틱 카운트로 근사(HS 기준)
   if (rate_debug.poll_rate_measure_cnt >= 8000)
   {
     rate_debug.poll_rate_measure_cnt = 0;
-    rate_debug.data_in_rate = rate_debug.data_in_cnt;
-    rate_debug.rate_time_min = rate_debug.rate_time_min_check;
-    rate_debug.rate_time_max = rate_debug.rate_time_max_check;
-    rate_debug.rate_time_avg = (rate_debug.data_in_cnt > 0) ? (rate_debug.rate_time_sum / rate_debug.data_in_cnt) : 0; // 0으로 나누기 방지
 
-    rate_debug.data_in_cnt = 0;
-    rate_debug.rate_time_sum = 0;
-    rate_debug.rate_time_min_check = 0xFFFF;
-    rate_debug.rate_time_max_check = 0;
+    if (!rate_debug.window_primed) {
+      // [V1.8.1] 프라임 단계: 카운터 리셋만 하고 출력 금지
+      rate_debug.window_primed = true;
+      rate_debug.data_in_cnt = 0;
+      rate_debug.rate_time_sum = 0;
+      rate_debug.rate_time_min_check = 0xFFFFFFFFU;
+      rate_debug.rate_time_max_check = 0;
+
+      // [V1.8.1] Δt_in 윈도우 초기화
+      rate_debug.din_interval_sum = 0;
+      rate_debug.din_interval_cnt = 0;
+      rate_debug.din_interval_min_check = 0;
+      rate_debug.din_interval_max_check = 0;
+      rate_debug.din_prev_time_us = 0;      // [V1.8.2] 경계 DT 방지
+      rate_debug.din_discard_next = true;   // [V1.8.2] 다음 첫 샘플 Δt_in 버림
+    } else {
+      // [V1.8.1] 정상 1초 윈도우 집계
+      rate_debug.data_in_rate = rate_debug.data_in_cnt;
+      rate_debug.rate_time_min = rate_debug.rate_time_min_check;
+      rate_debug.rate_time_max = rate_debug.rate_time_max_check;
+      rate_debug.rate_time_avg = (rate_debug.data_in_cnt > 0)
+                                  ? (rate_debug.rate_time_sum / rate_debug.data_in_cnt) : 0;
+
+      // [V1.8.1] Δt_in(폴링 간격) 집계 결과 확정
+      rate_debug.din_interval_avg = (rate_debug.din_interval_cnt > 0)
+                                    ? (rate_debug.din_interval_sum / rate_debug.din_interval_cnt) : 0;
+      rate_debug.din_interval_min = (rate_debug.din_interval_min_check == 0)
+                                    ? 0 : rate_debug.din_interval_min_check;
+      rate_debug.din_interval_max = rate_debug.din_interval_max_check;
+
+      // 다음 윈도우를 위한 리셋
+      rate_debug.data_in_cnt = 0;
+      rate_debug.rate_time_sum = 0;
+      rate_debug.rate_time_min_check = 0xFFFFFFFFU;
+      rate_debug.rate_time_max_check = 0;
+
+      // [V1.8.1] Δt_in 윈도우 리셋
+      rate_debug.din_interval_sum = 0;
+      rate_debug.din_interval_cnt = 0;
+      rate_debug.din_interval_min_check = 0;
+      rate_debug.din_interval_max_check = 0;
+      rate_debug.din_prev_time_us = 0;      // [V1.8.2] 경계 DT 방지
+      rate_debug.din_discard_next = true;   // [V1.8.2] 다음 첫 샘플 Δt_in 버림
+    }
   }
   rate_debug.poll_rate_measure_cnt++;
 }
 
 void usbHidMeasureRateTime(void)
 {
+  // -------- 전송 지연(latency) 집계 --------
   if (rate_debug.rate_time_req)
   {
-    uint64_t rate_time_cur; // [V1.5.0] 64비트 변수로 변경
-    rate_time_cur = micros64(); // [V1.5.0] micros64()로 변경
-    rate_debug.rate_time_us  = rate_time_cur - rate_debug.rate_time_pre;
-    rate_debug.rate_time_sum += rate_debug.rate_time_us;
-    if (rate_debug.rate_time_min_check > rate_debug.rate_time_us)
-    {
-      rate_debug.rate_time_min_check = rate_debug.rate_time_us;
-    }
-    if (rate_debug.rate_time_max_check < rate_debug.rate_time_us)
-    {
-      rate_debug.rate_time_max_check = rate_debug.rate_time_us;
-    }
+    uint64_t now_us = micros64();
+    uint32_t dt = (uint32_t)(now_us - rate_debug.rate_time_pre);
 
+    // [V1.8.1] 동일-틱/짧은 지연 샘플 무효화
+    if (g_usb_tick_id == rate_pre_tick_id || dt < 20U) {
+      rate_debug.invalid_samples_cnt++;
+      if (g_usb_tick_id == rate_pre_tick_id) {
+        rate_debug.same_tick_cnt++;
+      }
+      // 무효 샘플은 통계/히스토그램에 반영하지 않음
+    } else {
+      rate_debug.rate_time_us  = dt;
+      rate_debug.rate_time_sum += dt;
 
-    uint32_t rate_time_idx;
+      if (rate_debug.rate_time_min_check > dt)
+        rate_debug.rate_time_min_check = dt;
+      if (rate_debug.rate_time_max_check < dt)
+        rate_debug.rate_time_max_check = dt;
 
-    rate_time_idx = constrain(rate_debug.rate_time_us/10, 0, 99);
-    if (rate_debug.rate_his_buf[rate_time_idx] < 0xFFFF)
-    {
-      rate_debug.rate_his_buf[rate_time_idx]++;
+      uint32_t rate_time_idx = constrain(dt/10U, 0U, 99U);
+      if (rate_debug.rate_his_buf[rate_time_idx] < 0xFFFF)
+      {
+        rate_debug.rate_his_buf[rate_time_idx]++;
+      }
     }
 
     rate_debug.rate_time_req = false;
   }
 
+  // -------- 키 로깅(디버그) --------
   if (key_time_req)
   {
-    key_time_end = micros64()-key_time_pre; // [V1.5.0] micros64()로 변경
+    uint64_t now2 = micros64();
+    uint32_t dt2 = (uint32_t)(now2 - key_time_pre);
     key_time_req = false;
 
-    key_time_log[key_time_idx] = key_time_end;
+    // [V1.8.1] 동일-틱/짧은 지연은 키 로깅에서도 제외
+    if (g_usb_tick_id == key_pre_tick_id || dt2 < 20U) {
+      // 기록/인덱스 갱신을 건너뛰고 무효 샘플만 증가
+      rate_debug.invalid_samples_cnt++;
+      if (g_usb_tick_id == key_pre_tick_id) {
+        rate_debug.same_tick_cnt++;
+      }
+    } else {
+      key_time_end = dt2;
+      key_time_log[key_time_idx] = key_time_end;
 
-    if (key_time_raw_req)
-    {
-      key_time_raw_req = false;
-      key_time_raw_log[key_time_idx] = micros64()-key_time_raw_pre; // [V1.5.0] micros64()로 변경
-      key_time_pre_log[key_time_idx] = key_time_pre-key_time_raw_pre;
-    }
-    else
-    {
-      key_time_raw_log[key_time_idx] = key_time_end;
-    }
+      if (key_time_raw_req)
+      {
+        key_time_raw_req = false;
+        key_time_raw_log[key_time_idx] = (uint32_t)(now2 - key_time_raw_pre);
+        key_time_pre_log[key_time_idx] = (uint32_t)(key_time_pre - key_time_raw_pre);
+      }
+      else
+      {
+        key_time_raw_log[key_time_idx] = key_time_end;
+      }
 
-    key_time_idx = (key_time_idx + 1) % KEY_TIME_LOG_MAX;
-    if (key_time_cnt < KEY_TIME_LOG_MAX)
-    {
-      key_time_cnt++;
+      key_time_idx = (key_time_idx + 1) % KEY_TIME_LOG_MAX;
+      if (key_time_cnt < KEY_TIME_LOG_MAX)
+      {
+        key_time_cnt++;
+      }
     }
   }
 }
@@ -1295,11 +1426,15 @@ void usbHidProcessReportQueue(void)
     if (p_hhid->state == USBD_HID_IDLE)
     {
       qbufferRead(&report_q, (uint8_t *)hid_buf, 1);
-      // [V1.3.0] + [V1.8.0] SOF 기준 시각으로 정렬
-      key_time_pre = (uint32_t)timer_sof_start_time;
+      // [V1.8.1] SOF 대신 실제 전송 시각 사용 + 동일-틱 가드 스냅샷
+      key_time_pre = micros64();
+      key_pre_tick_id = g_usb_tick_id;
       key_time_req = true;
-      rate_debug.rate_time_pre = (uint32_t)timer_sof_start_time;
+
+      rate_debug.rate_time_pre = micros64();
+      rate_pre_tick_id = g_usb_tick_id;
       rate_debug.rate_time_req = true;
+
       USBD_HID_SendReport((uint8_t *)hid_buf, HID_KEYBOARD_REPORT_SIZE);
     }
   }
@@ -1331,6 +1466,9 @@ void usbHidProcessReportQueue(void)
 // 이 함수는 이제 micros.c의 콜백을 통해 125us 마다 호출됩니다.
 static void usbHidTimerCallback(void)
 {
+  // [V1.8.1] 동일-틱 가드를 위한 틱 증가
+  g_usb_tick_id++;
+
   // 1. 자동 안정성 모드 로직 실행
   usbHidProcessAutoStability();
 
@@ -1348,7 +1486,11 @@ static void usbHidTimerCallback(void)
 void usbHidResetDebugCounters(void)
 {
   memset(&rate_debug, 0, sizeof(usb_hid_rate_debug_t));
-  rate_debug.rate_time_min_check = 0xFFFF;
+  rate_debug.rate_time_min_check = 0xFFFFFFFFU;  // [V1.8.1] 초기 최소값
+  rate_debug.window_primed = false;              // [V1.8.1] 프라임 초기화
+  rate_debug.expected_interval_us = usbHidExpectedIntervalUs(); // [V1.8.1]
+  rate_debug.din_prev_time_us = 0;               // [V1.8.1] Δt_in 기준 초기화
+  rate_debug.din_discard_next = true;            // [V1.8.2] 첫 샘플 Δt_in 버리기
 }
 
 
@@ -1366,6 +1508,12 @@ uint32_t usbHidGetActualRate(void)
 uint32_t usbHidGetStabilityCounter(void)
 {
   return stability_counter;
+}
+
+// [V1.8.1] 얇은 getter 추가: SOF dT(ms) - ap.c 실시간 로그에서 사용
+uint32_t usbHidGetSofDtMs(void)
+{
+  return millis() - last_sof_time_ms;        // last_sof_time_ms는 SOF ISR에서 갱신
 }
 
 #ifdef _USE_HW_CLI
@@ -1422,9 +1570,8 @@ void cliCmd(cli_args_t *args)
     uint32_t pre_time;
     uint32_t pre_time_key;
     uint32_t key_send_cnt = 0;
-    bool is_first_log = true; // [V1.3.0] 첫 번째 로그 출력을 건너뛰기 위한 플래그
 
-    // [V1.1.0] 테스트 시작 전 모든 통계 변수를 깨끗하게 초기화합니다.
+    // [V1.8.1] 프라임 로직에 맞게 첫 1초는 출력 금지(카운터/통계 초기화만 수행)
     usbHidResetDebugCounters();
 
     pre_time = millis();
@@ -1443,20 +1590,27 @@ void cliCmd(cli_args_t *args)
       {
         pre_time = millis();
 
-        // [V1.3.0] 첫 번째 로그가 0으로 출력되는 현상 개선
-        if (is_first_log && rate_debug.data_in_rate == 0)
+        if (rate_debug.window_primed && rate_debug.data_in_rate > 0) // [V1.8.2] 빈 윈도우 차단
         {
-          // 아직 데이터가 없으면 출력하지 않음
-        }
-        else
-        {
-          is_first_log = false;
-          cliPrintf("hid rate %d Hz, avg %4d us, max %4d us, min %d us, sof_max_dt %d us\r\n",
+          // [V1.8.1] fixed: single cliPrintf with matching argument count (ASCII: dt_in)
+          cliPrintf(
+            "hid rate %d Hz, avg %4d us, max %4d us, min %d us, "
+            "sof_max_dt %d us, expected %d us, "
+            "dt_in avg %4d us (min %d, max %d), "
+            "drop(same/invalid) %d/%d, in_invalid %d\r\n",
             rate_debug.data_in_rate,
             rate_debug.rate_time_avg,
             rate_debug.rate_time_max,
             rate_debug.rate_time_min,
-            rate_debug.sof_interval_max_us);
+            rate_debug.sof_interval_max_us,
+            rate_debug.expected_interval_us,
+            rate_debug.din_interval_avg,
+            rate_debug.din_interval_min,
+            rate_debug.din_interval_max,
+            rate_debug.same_tick_cnt,
+            rate_debug.invalid_samples_cnt,
+            rate_debug.din_invalid_cnt
+          );
 
           for (int i=0; i<10; i++)
           {
@@ -1470,6 +1624,9 @@ void cliCmd(cli_args_t *args)
         key_send_cnt = 0;
         rate_debug.sof_cnt = 0;
         rate_debug.sof_interval_max_us = 0; // 1초마다 최대값도 리셋
+        // [V1.8.1] 드롭 카운터는 누적 유지(진단용), 필요시 여기서 리셋 가능
+        // rate_debug.same_tick_cnt = 0;
+        // rate_debug.invalid_samples_cnt = 0;
       }
     }
 
@@ -1478,6 +1635,13 @@ void cliCmd(cli_args_t *args)
       for (int i=0; i<100; i++)
       {
         cliPrintf("%d %d\r\n", i, rate_debug.rate_his_buf[i]);
+      }
+    }
+    else if (args->argc == 2 && args->isStr(1, "inhis")) // [V1.8.1] Δt_in 전용 히스토그램
+    {
+      for (int i=0; i<100; i++)
+      {
+        cliPrintf("%d %d\r\n", i, rate_debug.din_his_buf[i]);
       }
     }
     ret = true;
@@ -1571,14 +1735,29 @@ void cliCmd(cli_args_t *args)
     ret = true;
   }
 
-
   if (ret == false)
   {
+    // [V1.8.1] Updated help: prime window, separated histograms, dt_in stats
     cliPrintf("usbhid info\r\n");
     cliPrintf("usbhid status [on|off]\r\n");
+    cliPrintf("  - Enable/disable real-time status logging.\r\n");                        // [V1.8.1]
+
     cliPrintf("usbhid rate\r\n");
+    cliPrintf("  - 1-second windows; the FIRST second is a prime window (no print).\r\n"); // [V1.8.1]
+    cliPrintf("  - Prints: rate Hz, latency avg/max/min, sof_max_dt, expected_interval_us,\r\n"); // [V1.8.1]
+    cliPrintf("            dt_in avg/min/max, drop(same/invalid), in_invalid.\r\n");       // [V1.8.1]
+    cliPrintf("    * latency: SendReport -> IN complete (transport latency only)\r\n");    // [V1.8.1]
+    cliPrintf("    * dt_in  : consecutive IN-complete deltas (EP polling interval)\r\n");  // [V1.8.1]
+
     cliPrintf("usbhid rate his\r\n");
+    cliPrintf("  - Latency histogram (transport), 100 bins, 10us/bin, 0..990us.\r\n");     // [V1.8.1]
+
+    cliPrintf("usbhid rate inhis\r\n");
+    cliPrintf("  - dt_in histogram (IN-to-IN), 100 bins, 10us/bin, 0..990us.\r\n");        // [V1.8.1]
+
     cliPrintf("usbhid log\r\n");
+    cliPrintf("  - Shows last %d key-time samples; same-tick/<20us samples are excluded.\r\n", KEY_TIME_LOG_MAX); // [V1.8.1]
+
     cliPrintf("usbhid log clear\r\n");
     cliPrintf("usbhid check reg\r\n");
   }

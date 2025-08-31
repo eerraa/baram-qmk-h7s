@@ -182,8 +182,10 @@ bool usbHidIsCliStatusEnabled(void);
 uint32_t usbHidGetActualRate(void);
 
 // 자동 안정성 모드를 위한 API 추가
-#define STABILITY_THRESHOLD 60 // 60초(1분) 연속 안정 시 복구 가능 상태로 전환
+#define STABILITY_THRESHOLD 60             // 60초(1분) 연속 안정 시 복구 가능 상태로 전환
 uint32_t usbHidGetStabilityCounter(void);
+
+uint32_t usbHidGetSofDtMs(void);           // [V1.8.2] SOF dT(ms) getter 선언
 
 #endif  /* __USB_HID_H */
 /**

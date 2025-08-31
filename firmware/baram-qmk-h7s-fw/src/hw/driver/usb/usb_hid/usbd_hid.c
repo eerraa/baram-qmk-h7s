@@ -60,7 +60,7 @@
     if (HW_LOG_CH == HW_UART_CH_USB) logEnable();  \
   }
 #else
-#define logDebug(...) 
+#define logDebug(...)
 #endif
 
 
@@ -89,11 +89,47 @@ static uint8_t *USBD_HID_GetUsrStrDescriptor(struct _USBD_HandleTypeDef *pdev, u
 
 
 static void cliCmd(cli_args_t *args);
-static void usbHidMeasurePollRate(void);
-static void usbHidMeasureRateTime(void);
 static bool usbHidUpdateWakeUp(USBD_HandleTypeDef *pdev);
 static void usbHidInitTimer(void);
-static void usbHidResetRateCounters(void); // [NEW] 통계 리셋 함수 선언
+
+// [V1.1.0] 최적화: 타이머 콜백 내부 로직을 별도 함수로 분리
+static void usbHidProcessAutoStability(void);
+static void usbHidProcessReportQueue(void);
+
+// [V1.1.0] 최적화: `usbhid rate` 디버깅 관련 변수를 구조체로 통합
+typedef struct
+{
+  // Rate 측정 관련
+  uint32_t data_in_cnt;
+  uint32_t data_in_rate;
+  uint32_t poll_rate_measure_cnt;
+
+  // Latency 측정 관련
+  bool     rate_time_req;
+  uint32_t rate_time_pre;
+  uint32_t rate_time_us;
+  uint32_t rate_time_sum;
+  uint32_t rate_time_min_check;
+  uint32_t rate_time_max_check;
+  uint32_t rate_time_avg;
+  uint32_t rate_time_max;
+  uint32_t rate_time_min;
+
+  // SOF/Timer 동기화 측정 관련
+  uint32_t sof_cnt;
+  uint32_t timer_cnt;
+  uint32_t sof_interval_us;
+  uint32_t sof_interval_max_us;
+
+  // Histogram
+  uint16_t rate_his_buf[100];
+} usb_hid_rate_debug_t;
+
+static usb_hid_rate_debug_t rate_debug; // 디버깅 구조체 인스턴스
+static void usbHidResetDebugCounters(void);
+static void usbHidMeasurePollRate(void);
+static void usbHidMeasureRateTime(void);
+
 
 //-- 외부 공개 함수
 bool usbHidIsCliStatusEnabled(void);
@@ -116,31 +152,15 @@ typedef struct
   uint8_t buf[HID_EXK_EP_SIZE];
 } exk_report_info_t;
 
-// `usbhid rate` 디버깅용 변수들
-static uint32_t data_in_cnt = 0;
-static uint32_t data_in_rate = 0;
-static bool     rate_time_req = false;
-static uint32_t rate_time_pre = 0;
-static uint32_t rate_time_us  = 0;
-static uint32_t rate_time_min = 0;
-static uint32_t rate_time_avg = 0;
-static uint32_t rate_time_sum = 0;
-static uint32_t rate_time_max = 0;
-static uint32_t rate_time_min_check = 0xFFFF;
-static uint32_t rate_time_max_check = 0;
-static uint32_t rate_time_sof_pre = 0;
-static uint32_t rate_time_sof = 0;
-static uint16_t rate_his_buf[100];
-static uint32_t poll_rate_measure_cnt = 0; // [MOVED] usbHidMeasurePollRate 내부의 static cnt를 밖으로 이동
 
 // 안정성 측정 및 공용 변수들
 static uint32_t sof_1s_cnt = 0;      // 1초간 실제 폴링레이트 측정용 카운터
 static uint32_t last_sof_time_ms = 0; // SOF 수신 시간을 기록할 변수
 static uint32_t instability_counter = 0;
 static uint32_t stability_counter = 0; // 모듈 내부에서만 사용
+static uint32_t timer_sof_start_time = 0; // [V1.1.0] SOF-Timer 간격 측정을 위한 시작 시간 변수
 
 // CLI 및 기타 변수들
-static uint32_t sof_cnt = 0; // CLI 디버깅용
 static USBD_SetupReqTypedef ep0_req;
 static uint8_t ep0_req_buf[USB_MAX_EP0_SIZE];
 
@@ -173,7 +193,7 @@ static uint32_t key_time_pre_log[KEY_TIME_LOG_MAX];
 
 // 전역 변수 선언
 bool cli_status_enabled = false;
-uint32_t actual_polling_rate = 0; 
+uint32_t actual_polling_rate = 0;
 #define INSTABILITY_THRESHOLD 3 // 3초 연속 성능 저하 시 강등
 
 USBD_ClassTypeDef USBD_HID =
@@ -202,7 +222,7 @@ USBD_ClassTypeDef USBD_HID =
 
 #if (USBD_SUPPORT_USER_STRING_DESC == 1U)
   USBD_HID_GetUsrStrDescriptor,
-#endif 
+#endif
 };
 
 #ifndef USE_USBD_COMPOSITE
@@ -410,7 +430,7 @@ __ALIGN_BEGIN static uint8_t HID_KEYBOARD_ReportDesc[HID_KEYBOARD_REPORT_DESC_SI
   0xc0                                // END_COLLECTION
 };
 
-__ALIGN_BEGIN static uint8_t HID_VIA_ReportDesc[HID_KEYBOARD_VIA_REPORT_DESC_SIZE] __ALIGN_END = 
+__ALIGN_BEGIN static uint8_t HID_VIA_ReportDesc[HID_KEYBOARD_VIA_REPORT_DESC_SIZE] __ALIGN_END =
 {
   //
   0x06, 0x60, 0xFF, // Usage Page (Vendor Defined)
@@ -533,12 +553,12 @@ static uint8_t USBD_HID_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
   if (is_first)
   {
     is_first = false;
-    
+
     //polling_rate_init(); 주석처리함, hwInit() 함수에서 이미 호출됨
 
-    qbufferCreateBySize(&report_q, (uint8_t *)report_buf, sizeof(report_info_t), 128); 
-    qbufferCreateBySize(&via_report_q, (uint8_t *)via_report_q_buf, sizeof(via_report_info_t), 128); 
-    qbufferCreateBySize(&report_exk_q, (uint8_t *)report_exk_buf, sizeof(report_info_t), 128); 
+    qbufferCreateBySize(&report_q, (uint8_t *)report_buf, sizeof(report_info_t), 128);
+    qbufferCreateBySize(&via_report_q, (uint8_t *)via_report_q_buf, sizeof(via_report_info_t), 128);
+    qbufferCreateBySize(&report_exk_q, (uint8_t *)report_exk_buf, sizeof(report_info_t), 128);
 
     logPrintf("[OK] USB Hid\n");
     logPrintf("     Keyboard\n");
@@ -613,33 +633,33 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
       switch (req->bRequest)
       {
         case USBD_HID_REQ_SET_PROTOCOL:
-          logDebug("  USBD_HID_REQ_SET_PROTOCOL  : 0x%X, 0x%d\n", req->wValue, req->wLength);      
+          logDebug("  USBD_HID_REQ_SET_PROTOCOL  : 0x%X, 0x%d\n", req->wValue, req->wLength);
           hhid->Protocol = (uint8_t)(req->wValue);
           break;
 
         case USBD_HID_REQ_GET_PROTOCOL:
-          logDebug("  USBD_HID_REQ_GET_PROTOCOL  : 0x%X, 0x%d\n", req->wValue, req->wLength);      
+          logDebug("  USBD_HID_REQ_GET_PROTOCOL  : 0x%X, 0x%d\n", req->wValue, req->wLength);
           (void)USBD_CtlSendData(pdev, (uint8_t *)&hhid->Protocol, 1U);
           break;
 
         case USBD_HID_REQ_SET_IDLE:
-          logDebug("  USBD_HID_REQ_SET_IDLE  : 0x%X, 0x%d\n", req->wValue, req->wLength);      
+          logDebug("  USBD_HID_REQ_SET_IDLE  : 0x%X, 0x%d\n", req->wValue, req->wLength);
           hhid->IdleState = (uint8_t)(req->wValue >> 8);
           break;
 
         case USBD_HID_REQ_GET_IDLE:
-          logDebug("  USBD_HID_REQ_GET_IDLE  : 0x%X, 0x%d\n", req->wValue, req->wLength);          
+          logDebug("  USBD_HID_REQ_GET_IDLE  : 0x%X, 0x%d\n", req->wValue, req->wLength);
           (void)USBD_CtlSendData(pdev, (uint8_t *)&hhid->IdleState, 1U);
           break;
 
-        case USBD_HID_REQ_SET_REPORT:  
-          logDebug("  USBD_HID_REQ_SET_REPORT  : 0x%X, 0x%d\n", req->wValue, req->wLength);     
+        case USBD_HID_REQ_SET_REPORT:
+          logDebug("  USBD_HID_REQ_SET_REPORT  : 0x%X, 0x%d\n", req->wValue, req->wLength);
           ep0_req = *req;
           USBD_CtlPrepareRx(pdev, ep0_req_buf, req->wLength);
           break;
 
         default:
-          logDebug("  ERROR  : 0x%X\n", req->wValue); 
+          logDebug("  ERROR  : 0x%X\n", req->wValue);
           USBD_CtlError(pdev, req);
           ret = USBD_FAIL;
           break;
@@ -661,7 +681,7 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
           break;
 
         case USB_REQ_GET_DESCRIPTOR:
-          logDebug("  USB_REQ_GET_DESCRIPTOR  : 0x%X\n", req->wValue); 
+          logDebug("  USB_REQ_GET_DESCRIPTOR  : 0x%X\n", req->wValue);
           if ((req->wValue >> 8) == HID_REPORT_DESC)
           {
             switch(req->wIndex)
@@ -697,7 +717,7 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
           break;
 
         case USB_REQ_GET_INTERFACE :
-          logDebug("  USB_REQ_GET_INTERFACE  : 0x%X\n", req->wValue); 
+          logDebug("  USB_REQ_GET_INTERFACE  : 0x%X\n", req->wValue);
           if (pdev->dev_state == USBD_STATE_CONFIGURED)
           {
             (void)USBD_CtlSendData(pdev, (uint8_t *)&hhid->AltSetting, 1U);
@@ -710,7 +730,7 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
           break;
 
         case USB_REQ_SET_INTERFACE:
-          logDebug("  USB_REQ_SET_INTERFACE  : 0x%X\n", req->wValue); 
+          logDebug("  USB_REQ_SET_INTERFACE  : 0x%X\n", req->wValue);
           if (pdev->dev_state == USBD_STATE_CONFIGURED)
           {
             hhid->AltSetting = (uint8_t)(req->wValue);
@@ -723,11 +743,11 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
           break;
 
         case USB_REQ_CLEAR_FEATURE:
-          logDebug("  USB_REQ_CLEAR_FEATURE  : 0x%X\n", req->wValue); 
+          logDebug("  USB_REQ_CLEAR_FEATURE  : 0x%X\n", req->wValue);
           break;
 
         default:
-          logDebug("  ERROR  : 0x%X\n", req->wValue); 
+          logDebug("  ERROR  : 0x%X\n", req->wValue);
           USBD_CtlError(pdev, req);
           ret = USBD_FAIL;
           break;
@@ -943,8 +963,8 @@ static uint8_t USBD_HID_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum)
   {
     return (uint8_t)USBD_OK;
   }
-  
-  data_in_cnt++;
+
+  rate_debug.data_in_cnt++;
 
   usbHidMeasureRateTime();
 
@@ -983,19 +1003,13 @@ static uint8_t USBD_HID_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
 
 uint8_t USBD_HID_SOF(USBD_HandleTypeDef *pdev)
 {
-  // 자동 안정성 모드를 위한 SOF 카운터와 시간 기록
+  // SOF 수신 시간 기록
   last_sof_time_ms = millis();
+  timer_sof_start_time = micros(); // [V1.1.0] SOF-Timer 간격 측정을 위한 시작 시간 기록
+
+  // 1초당 SOF 카운트 (Auto-Stability 모드에서 사용)
   sof_1s_cnt++;
 
-  // 'usbhid rate' 디버깅을 위한 측정 함수 호출
-  usbHidMeasurePollRate();
-
-  if (qbufferAvailable(&via_report_q) && (millis()-via_report_pre_time) >= via_report_time)
-  {
-    qbufferRead(&via_report_q, (uint8_t *)via_hid_usb_report, 1);
-    USBD_LL_Transmit(pdev, HID_VIA_EP_OUT, via_hid_usb_report, sizeof(via_hid_usb_report));
-    USBD_LL_PrepareReceive(pdev, HID_VIA_EP_OUT, via_hid_usb_report, sizeof(via_hid_usb_report));
-  }
   return (uint8_t)USBD_OK;
 }
 
@@ -1019,7 +1033,7 @@ bool usbHidUpdateWakeUp(USBD_HandleTypeDef *pdev)
 {
   PCD_HandleTypeDef *hpcd = (PCD_HandleTypeDef *)pdev->pData;
   bool ret = false;
-  
+
   if (pdev->dev_state == USBD_STATE_SUSPENDED)
   {
     logPrintf("[  ] USB WakeUp\n");
@@ -1055,20 +1069,21 @@ bool usbHidSendReport(uint8_t *p_data, uint16_t length)
     if (USBD_HID_SendReport((uint8_t *)hid_buf, HID_KEYBOARD_REPORT_SIZE))
     {
       key_time_req = true;
-      rate_time_req = true;
-      rate_time_pre = micros();    
-    }  
+      // [V1.2.0] 버그 수정: 즉시 전송 시, 시간과 플래그를 함께 설정
+      rate_debug.rate_time_pre = micros();
+      rate_debug.rate_time_req = true;
+    }
     else
     {
       memcpy(report_info.buf, p_data, length);
-      qbufferWrite(&report_q, (uint8_t *)&report_info, 1);        
-    }    
+      qbufferWrite(&report_q, (uint8_t *)&report_info, 1);
+    }
   }
   else
   {
     usbHidUpdateWakeUp(&USBD_Device);
   }
-  
+
   return true;
 }
 
@@ -1086,66 +1101,63 @@ bool usbHidSendReportEXK(uint8_t *p_data, uint16_t length)
     {
       report_info.len = length;
       memcpy(report_info.buf, p_data, length);
-      qbufferWrite(&report_exk_q, (uint8_t *)&report_info, 1);        
-    }    
+      qbufferWrite(&report_exk_q, (uint8_t *)&report_info, 1);
+    }
   }
   else
   {
     usbHidUpdateWakeUp(&USBD_Device);
   }
-  
+
   return true;
 }
 
 void usbHidMeasurePollRate(void)
 {
-  rate_time_sof_pre = micros();
-  if (poll_rate_measure_cnt >= 8000)
+  if (rate_debug.poll_rate_measure_cnt >= 8000)
   {
-    poll_rate_measure_cnt = 0;
-    data_in_rate = data_in_cnt;
-    rate_time_min = rate_time_min_check;
-    rate_time_max = rate_time_max_check;
-    rate_time_avg = (data_in_cnt > 0) ? (rate_time_sum / data_in_cnt) : 0; // 0으로 나누기 방지
-    
-    data_in_cnt = 0;
-    rate_time_sum = 0;
-    rate_time_min_check = 0xFFFF;
-    rate_time_max_check = 0;
+    rate_debug.poll_rate_measure_cnt = 0;
+    rate_debug.data_in_rate = rate_debug.data_in_cnt;
+    rate_debug.rate_time_min = rate_debug.rate_time_min_check;
+    rate_debug.rate_time_max = rate_debug.rate_time_max_check;
+    rate_debug.rate_time_avg = (rate_debug.data_in_cnt > 0) ? (rate_debug.rate_time_sum / rate_debug.data_in_cnt) : 0; // 0으로 나누기 방지
+
+    rate_debug.data_in_cnt = 0;
+    rate_debug.rate_time_sum = 0;
+    rate_debug.rate_time_min_check = 0xFFFF;
+    rate_debug.rate_time_max_check = 0;
   }
-  poll_rate_measure_cnt++;
+  rate_debug.poll_rate_measure_cnt++;
 }
 
 void usbHidMeasureRateTime(void)
 {
-  rate_time_sof = micros() - rate_time_sof_pre;
-
-  if (rate_time_req)
+  if (rate_debug.rate_time_req)
   {
     uint32_t rate_time_cur;
-    
+
     rate_time_cur = micros();
-    rate_time_us  = rate_time_cur - rate_time_pre;
-    rate_time_sum += rate_time_us; 
-    if (rate_time_min_check > rate_time_us)
+    rate_debug.rate_time_us  = rate_time_cur - rate_debug.rate_time_pre;
+    rate_debug.rate_time_sum += rate_debug.rate_time_us;
+    if (rate_debug.rate_time_min_check > rate_debug.rate_time_us)
     {
-      rate_time_min_check = rate_time_us;
+      rate_debug.rate_time_min_check = rate_debug.rate_time_us;
     }
-    if (rate_time_max_check < rate_time_us)
+    if (rate_debug.rate_time_max_check < rate_debug.rate_time_us)
     {
-      rate_time_max_check = rate_time_us;
+      rate_debug.rate_time_max_check = rate_debug.rate_time_us;
     }
 
 
     uint32_t rate_time_idx;
 
-    rate_time_idx = constrain(rate_time_us/10, 0, 99);
-    if (rate_his_buf[rate_time_idx] < 0xFFFF)
+    rate_time_idx = constrain(rate_debug.rate_time_us/10, 0, 99);
+    if (rate_debug.rate_his_buf[rate_time_idx] < 0xFFFF)
     {
-      rate_his_buf[rate_time_idx]++;
-    }  
+      rate_debug.rate_his_buf[rate_time_idx]++;
+    }
 
-    rate_time_req = false;
+    rate_debug.rate_time_req = false;
   }
 
   if (key_time_req)
@@ -1171,14 +1183,14 @@ void usbHidMeasureRateTime(void)
     {
       key_time_cnt++;
     }
-  }  
+  }
 }
 
 bool usbHidGetRateInfo(usb_hid_rate_info_t *p_info)
 {
-  p_info->freq_hz = data_in_rate;
-  p_info->time_max = rate_time_max;
-  p_info->time_min = rate_time_min;
+  p_info->freq_hz = rate_debug.data_in_rate;
+  p_info->time_max = rate_debug.rate_time_max;
+  p_info->time_min = rate_debug.rate_time_min;
   return true;
 }
 
@@ -1276,12 +1288,9 @@ void TIM2_IRQHandler(void)
   HAL_TIM_IRQHandler(&htim2);
 }
 
-volatile int timer_cnt = 0;
-volatile uint32_t timer_end = 0;
-
-void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+// [V1.1.0] 리팩토링: 자동 안정성 검사 로직 분리
+void usbHidProcessAutoStability(void)
 {
-  // 1. 자동 안정성 모드 로직 (1초에 한 번만 실행되도록 제어)
   static uint32_t last_check_time = 0;
   if (millis() - last_check_time >= 1000)
   {
@@ -1306,7 +1315,7 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
           }
           return;
       }
-      
+
       bool is_unstable = false;
       if ((current_mode == POLLING_RATE_8K && actual_rate > 0 && actual_rate < TARGET_RATE_8K) ||
           (current_mode == POLLING_RATE_4K && actual_rate > 0 && actual_rate < TARGET_RATE_4K)) {
@@ -1337,54 +1346,80 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
           }
       }
   }
+}
 
-  // 2. 기존의 리포트 큐 처리 로직들 및 디버깅 변수 업데이트
-  timer_cnt++;
-  timer_end = micros()-rate_time_sof_pre;
-  sof_cnt++; // 'usbhid rate' 출력용 sof_cnt는 타이머 콜백에서 증가
-
+// [V1.1.0] 리팩토링: 리포트 큐 처리 로직 분리
+void usbHidProcessReportQueue(void)
+{
+  // Main HID Report Queue
   if (qbufferAvailable(&report_q) > 0)
   {
     if (p_hhid->state == USBD_HID_IDLE)
     {
       qbufferRead(&report_q, (uint8_t *)hid_buf, 1);
+      
+      // [V1.3.0] 버그 수정: 큐에서 꺼낼 때 key_time_pre 갱신
+      key_time_pre = micros();
       key_time_req = true;
 
+      // [V1.2.0] 버그 수정: 큐에서 꺼낼 때, 시간과 플래그를 함께 설정
+      rate_debug.rate_time_pre = micros();
+      rate_debug.rate_time_req = true;
       USBD_HID_SendReport((uint8_t *)hid_buf, HID_KEYBOARD_REPORT_SIZE);
-      rate_time_req = true;
-      rate_time_pre = micros();
     }
   }
 
+  // EXK Report Queue
   if (qbufferAvailable(&report_exk_q) > 0)
   {
     if (p_hhid->state == USBD_HID_IDLE)
     {
       exk_report_info_t report_info;
-
       qbufferRead(&report_exk_q, (uint8_t *)&report_info, 1);
-
       memcpy(hid_buf_exk, report_info.buf, report_info.len);
       USBD_HID_SendReportEXK((uint8_t *)hid_buf_exk, report_info.len);
     }
   }
+
+  // VIA Report Queue
+  if (qbufferAvailable(&via_report_q) && (millis()-via_report_pre_time) >= via_report_time)
+  {
+    USBD_HandleTypeDef *pdev = &USBD_Device;
+    qbufferRead(&via_report_q, (uint8_t *)via_hid_usb_report, 1);
+    USBD_LL_Transmit(pdev, HID_VIA_EP_OUT, via_hid_usb_report, sizeof(via_hid_usb_report));
+    USBD_LL_PrepareReceive(pdev, HID_VIA_EP_OUT, via_hid_usb_report, sizeof(via_hid_usb_report));
+  }
 }
 
-// [NEW] 'usbhid rate' 테스트 시작 시 모든 관련 통계 변수를 초기화하는 함수
-void usbHidResetRateCounters(void)
+
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 {
-  data_in_cnt = 0;
-  data_in_rate = 0;
-  rate_time_sum = 0;
-  rate_time_min_check = 0xFFFF;
-  rate_time_max_check = 0;
-  rate_time_avg = 0;
-  rate_time_max = 0;
-  rate_time_min = 0;
-  sof_cnt = 0;
-  timer_cnt = 0;
-  poll_rate_measure_cnt = 0; // usbHidMeasurePollRate의 내부 카운터도 초기화
-  memset(rate_his_buf, 0, sizeof(rate_his_buf));
+  // 1. 자동 안정성 모드 로직 실행
+  usbHidProcessAutoStability();
+
+  // 2. 모든 리포트 큐 처리
+  usbHidProcessReportQueue();
+
+  // 3. 'usbhid rate' 디버깅을 위한 통계 업데이트
+  usbHidMeasurePollRate();
+
+  rate_debug.timer_cnt++;
+  rate_debug.sof_cnt++;
+
+  // [V1.1.0] 버그 수정: SOF와 Timer 콜백 간의 시간차를 정확히 측정
+  rate_debug.sof_interval_us = micros() - timer_sof_start_time;
+  if (rate_debug.sof_interval_us > rate_debug.sof_interval_max_us)
+  {
+      rate_debug.sof_interval_max_us = rate_debug.sof_interval_us;
+  }
+}
+
+
+// [V1.1.0] `usbhid rate` 테스트 시작 시 모든 관련 통계 변수를 초기화하는 함수
+void usbHidResetDebugCounters(void)
+{
+  memset(&rate_debug, 0, sizeof(usb_hid_rate_debug_t));
+  rate_debug.rate_time_min_check = 0xFFFF;
 }
 
 
@@ -1458,9 +1493,10 @@ void cliCmd(cli_args_t *args)
     uint32_t pre_time;
     uint32_t pre_time_key;
     uint32_t key_send_cnt = 0;
+    bool is_first_log = true; // [V1.3.0] 첫 번째 로그 출력을 건너뛰기 위한 플래그
 
-    // [MODIFIED] 테스트 시작 전 모든 통계 변수를 깨끗하게 초기화합니다.
-    usbHidResetRateCounters();
+    // [V1.1.0] 테스트 시작 전 모든 통계 변수를 깨끗하게 초기화합니다.
+    usbHidResetDebugCounters();
 
     pre_time = millis();
     pre_time_key = millis();
@@ -1477,23 +1513,34 @@ void cliCmd(cli_args_t *args)
       if (millis()-pre_time >= 1000)
       {
         pre_time = millis();
-        cliPrintf("hid rate %d Hz, avg %4d us, max %4d us, min %d us, %d, %d\r\n",
-          data_in_rate,
-          rate_time_avg,
-          rate_time_max,
-          rate_time_min,
-          rate_time_sof,
-          timer_end);
-        for (int i=0; i<10; i++)
+
+        // [V1.3.0] 첫 번째 로그가 0으로 출력되는 현상 개선
+        if (is_first_log && rate_debug.data_in_rate == 0)
         {
-          cliPrintf("%d us\r\n",key_time_log[i]);
+          // 아직 데이터가 없으면 출력하지 않음
         }
-        cliPrintf("sof/tim cnt : %d/%d\r\n", sof_cnt, timer_cnt);
-        
+        else
+        {
+          is_first_log = false;
+          cliPrintf("hid rate %d Hz, avg %4d us, max %4d us, min %d us, sof_max_dt %d us\r\n",
+            rate_debug.data_in_rate,
+            rate_debug.rate_time_avg,
+            rate_debug.rate_time_max,
+            rate_debug.rate_time_min,
+            rate_debug.sof_interval_max_us);
+
+          for (int i=0; i<10; i++)
+          {
+            cliPrintf("%d us\r\n",key_time_log[i]);
+          }
+          cliPrintf("sof/tim cnt : %d/%d\r\n", rate_debug.sof_cnt, rate_debug.timer_cnt);
+        }
+
         // 다음 1초 측정을 위해 초당 카운터만 리셋
-        timer_cnt = 0;
+        rate_debug.timer_cnt = 0;
         key_send_cnt = 0;
-        sof_cnt = 0;
+        rate_debug.sof_cnt = 0;
+        rate_debug.sof_interval_max_us = 0; // 1초마다 최대값도 리셋
       }
     }
 
@@ -1501,7 +1548,7 @@ void cliCmd(cli_args_t *args)
     {
       for (int i=0; i<100; i++)
       {
-        cliPrintf("%d %d\r\n", i, rate_his_buf[i]);
+        cliPrintf("%d %d\r\n", i, rate_debug.rate_his_buf[i]);
       }
     }
     ret = true;

@@ -158,7 +158,7 @@ static uint32_t sof_1s_cnt = 0;      // 1초간 실제 폴링레이트 측정용
 static uint32_t last_sof_time_ms = 0; // SOF 수신 시간을 기록할 변수
 static uint32_t instability_counter = 0;
 static uint32_t stability_counter = 0; // 모듈 내부에서만 사용
-static uint32_t timer_sof_start_time = 0; // [V1.1.0] SOF-Timer 간격 측정을 위한 시작 시간 변수
+static uint64_t timer_sof_start_time = 0; // [V1.8.0] 64-bit: SOF-Timer 간격 측정을 위한 시작 시각(us)
 
 // CLI 및 기타 변수들
 static USBD_SetupReqTypedef ep0_req;
@@ -1005,12 +1005,21 @@ static uint8_t USBD_HID_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
   return (uint8_t)USBD_OK;
 }
 
-// [V1.5.0] 모든 micros() 호출을 micros64()로 변경
-// 예시: USBD_HID_SOF
+// [V1.8.0] SOF 통계를 SOF ISR에서만 집계
 uint8_t USBD_HID_SOF(USBD_HandleTypeDef *pdev)
 {
+  (void)pdev;
   last_sof_time_ms = millis();
-  timer_sof_start_time = micros64(); // [V1.5.0] micros64()로 변경
+  uint64_t now_us = micros64();
+  if (timer_sof_start_time != 0) {
+    uint32_t dt = (uint32_t)(now_us - timer_sof_start_time);
+    rate_debug.sof_interval_us = dt;
+    if (dt > rate_debug.sof_interval_max_us) {
+      rate_debug.sof_interval_max_us = dt;
+    }
+  }
+  timer_sof_start_time = now_us;
+  rate_debug.sof_cnt++;
   sof_1s_cnt++;
   return (uint8_t)USBD_OK;
 }
@@ -1068,12 +1077,11 @@ bool usbHidSendReport(uint8_t *p_data, uint16_t length)
     memcpy(hid_buf, p_data, length);
     if (USBD_HID_SendReport((uint8_t *)hid_buf, HID_KEYBOARD_REPORT_SIZE))
     {
-      // 전송이 즉시 성공했을 때만 시간과 플래그를 함께 설정합니다.
-      key_time_pre = micros64(); // [V1.5.0] micros64()로 변경
+      // [V1.8.0] 측정 기준을 SOF 시각으로 정렬 (8kHz 위상 영향 제거)
+      key_time_pre = (uint32_t)timer_sof_start_time;
       key_time_req = true;
-      
-      // [V1.2.0] 버그 수정: 즉시 전송 시, 시간과 플래그를 함께 설정
-      rate_debug.rate_time_pre = micros64(); // [V1.5.0] micros64()로 변경
+      // [V1.2.0]+[V1.8.0]
+      rate_debug.rate_time_pre = (uint32_t)timer_sof_start_time;
       rate_debug.rate_time_req = true;
     }
     else
@@ -1287,11 +1295,10 @@ void usbHidProcessReportQueue(void)
     if (p_hhid->state == USBD_HID_IDLE)
     {
       qbufferRead(&report_q, (uint8_t *)hid_buf, 1);
-      // [V1.3.0] 버그 수정: 큐에서 꺼낼 때 key_time_pre 갱신
-      key_time_pre = micros64(); // [V1.5.0] micros64()로 변경
+      // [V1.3.0] + [V1.8.0] SOF 기준 시각으로 정렬
+      key_time_pre = (uint32_t)timer_sof_start_time;
       key_time_req = true;
-      // [V1.2.0] 버그 수정: 큐에서 꺼낼 때, 시간과 플래그를 함께 설정
-      rate_debug.rate_time_pre = micros64(); // [V1.5.0] micros64()로 변경
+      rate_debug.rate_time_pre = (uint32_t)timer_sof_start_time;
       rate_debug.rate_time_req = true;
       USBD_HID_SendReport((uint8_t *)hid_buf, HID_KEYBOARD_REPORT_SIZE);
     }
@@ -1332,15 +1339,8 @@ static void usbHidTimerCallback(void)
 
   // 3. 'usbhid rate' 디버깅을 위한 통계 업데이트
   usbHidMeasurePollRate();
-
+  // SOF 관련 카운트/간격은 SOF ISR에서만 갱신한다.
   rate_debug.timer_cnt++;
-  rate_debug.sof_cnt++;
-
-  rate_debug.sof_interval_us = micros64() - timer_sof_start_time; // 변경
-  if (rate_debug.sof_interval_us > rate_debug.sof_interval_max_us)
-  {
-      rate_debug.sof_interval_max_us = rate_debug.sof_interval_us;
-  }
 }
 
 

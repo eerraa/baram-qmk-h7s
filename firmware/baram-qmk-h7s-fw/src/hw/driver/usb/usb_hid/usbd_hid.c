@@ -1063,18 +1063,23 @@ bool usbHidSendReport(uint8_t *p_data, uint16_t length)
 
   if (!USBD_is_suspended())
   {
-    key_time_pre = micros();
+    // key_time_pre = micros(); // 이 라인을 삭제합니다.
 
     memcpy(hid_buf, p_data, length);
     if (USBD_HID_SendReport((uint8_t *)hid_buf, HID_KEYBOARD_REPORT_SIZE))
     {
+      // 전송이 즉시 성공했을 때만 시간과 플래그를 함께 설정합니다.
+      key_time_pre = micros(); // 수정된 위치
       key_time_req = true;
+      
       // [V1.2.0] 버그 수정: 즉시 전송 시, 시간과 플래그를 함께 설정
       rate_debug.rate_time_pre = micros();
       rate_debug.rate_time_req = true;
     }
     else
     {
+      // 큐에 저장될 때는 시작 시간을 기록하지 않습니다.
+      // (나중에 큐에서 꺼낼 때 usbHidProcessReportQueue 함수에서 기록됨)
       memcpy(report_info.buf, p_data, length);
       qbufferWrite(&report_q, (uint8_t *)&report_info, 1);
     }

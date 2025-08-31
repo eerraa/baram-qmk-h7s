@@ -51,6 +51,7 @@
 
 #include "reset.h"        // resetToReset() 함수를 사용하기 위함
 #include "polling_rate.h" // polling_rate_init() 함수를 사용하기 위함
+#include "micros.h"       // [V1.5.0] 새로 만든 64비트 시간 함수를 사용하기 위함
 
 #if HW_USB_LOG == 1
 #define logDebug(...)                              \
@@ -90,7 +91,6 @@ static uint8_t *USBD_HID_GetUsrStrDescriptor(struct _USBD_HandleTypeDef *pdev, u
 
 static void cliCmd(cli_args_t *args);
 static bool usbHidUpdateWakeUp(USBD_HandleTypeDef *pdev);
-static void usbHidInitTimer(void);
 
 // [V1.1.0] 최적화: 타이머 콜백 내부 로직을 별도 함수로 분리
 static void usbHidProcessAutoStability(void);
@@ -486,7 +486,10 @@ __ALIGN_BEGIN static uint8_t HID_EXK_ReportDesc[HID_EXK_REPORT_DESC_SIZE] __ALIG
 static USBD_HID_HandleTypeDef *p_hhid = NULL;
 static uint8_t HIDInEpAdd = HID_EPIN_ADDR;
 extern USBD_HandleTypeDef USBD_Device;
-static TIM_HandleTypeDef htim2;
+// static TIM_HandleTypeDef htim2; // [V1.5.0] 삭제: micros.c에서 중앙 관리
+
+// [V1.5.0] 8kHz 콜백으로 호출될 함수 프로토타입
+static void usbHidTimerCallback(void);
 
 /**
   * @brief  USBD_HID_Init
@@ -564,7 +567,8 @@ static uint8_t USBD_HID_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
     logPrintf("     Keyboard\n");
     cliAdd("usbhid", cliCmd);
 
-    usbHidInitTimer();
+    // usbHidInitTimer(); // [V1.5.0] 삭제: hwInit()에서 microsInit()이 호출됨
+    microsSetCallback(usbHidTimerCallback); // [V1.5.0] 8kHz 콜백 함수 등록
   }
 
   return (uint8_t)USBD_OK;
@@ -1001,15 +1005,13 @@ static uint8_t USBD_HID_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
   return (uint8_t)USBD_OK;
 }
 
+// [V1.5.0] 모든 micros() 호출을 micros64()로 변경
+// 예시: USBD_HID_SOF
 uint8_t USBD_HID_SOF(USBD_HandleTypeDef *pdev)
 {
-  // SOF 수신 시간 기록
   last_sof_time_ms = millis();
-  timer_sof_start_time = micros(); // [V1.1.0] SOF-Timer 간격 측정을 위한 시작 시간 기록
-
-  // 1초당 SOF 카운트 (Auto-Stability 모드에서 사용)
+  timer_sof_start_time = micros64(); // [V1.5.0] micros64()로 변경
   sof_1s_cnt++;
-
   return (uint8_t)USBD_OK;
 }
 
@@ -1063,17 +1065,15 @@ bool usbHidSendReport(uint8_t *p_data, uint16_t length)
 
   if (!USBD_is_suspended())
   {
-    // key_time_pre = micros(); // 이 라인을 삭제합니다.
-
     memcpy(hid_buf, p_data, length);
     if (USBD_HID_SendReport((uint8_t *)hid_buf, HID_KEYBOARD_REPORT_SIZE))
     {
       // 전송이 즉시 성공했을 때만 시간과 플래그를 함께 설정합니다.
-      key_time_pre = micros(); // 수정된 위치
+      key_time_pre = micros64(); // [V1.5.0] micros64()로 변경
       key_time_req = true;
       
       // [V1.2.0] 버그 수정: 즉시 전송 시, 시간과 플래그를 함께 설정
-      rate_debug.rate_time_pre = micros();
+      rate_debug.rate_time_pre = micros64(); // [V1.5.0] micros64()로 변경
       rate_debug.rate_time_req = true;
     }
     else
@@ -1139,9 +1139,8 @@ void usbHidMeasureRateTime(void)
 {
   if (rate_debug.rate_time_req)
   {
-    uint32_t rate_time_cur;
-
-    rate_time_cur = micros();
+    uint64_t rate_time_cur; // [V1.5.0] 64비트 변수로 변경
+    rate_time_cur = micros64(); // [V1.5.0] micros64()로 변경
     rate_debug.rate_time_us  = rate_time_cur - rate_debug.rate_time_pre;
     rate_debug.rate_time_sum += rate_debug.rate_time_us;
     if (rate_debug.rate_time_min_check > rate_debug.rate_time_us)
@@ -1167,7 +1166,7 @@ void usbHidMeasureRateTime(void)
 
   if (key_time_req)
   {
-    key_time_end = micros()-key_time_pre;
+    key_time_end = micros64()-key_time_pre; // [V1.5.0] micros64()로 변경
     key_time_req = false;
 
     key_time_log[key_time_idx] = key_time_end;
@@ -1175,7 +1174,7 @@ void usbHidMeasureRateTime(void)
     if (key_time_raw_req)
     {
       key_time_raw_req = false;
-      key_time_raw_log[key_time_idx] = micros()-key_time_raw_pre;
+      key_time_raw_log[key_time_idx] = micros64()-key_time_raw_pre; // [V1.5.0] micros64()로 변경
       key_time_pre_log[key_time_idx] = key_time_pre-key_time_raw_pre;
     }
     else
@@ -1211,87 +1210,13 @@ __weak void usbHidSetStatusLed(uint8_t led_bits)
 
 }
 
-void usbHidInitTimer(void)
-{
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_SlaveConfigTypeDef sSlaveConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 299;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_OC_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sSlaveConfig.SlaveMode = TIM_SLAVEMODE_COMBINED_RESETTRIGGER;
-  sSlaveConfig.InputTrigger = TIM_TS_ITR13;
-  if (HAL_TIM_SlaveConfigSynchro(&htim2, &sSlaveConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_TIMING;
-  sConfigOC.Pulse = 120;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_OC_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  HAL_TIM_OC_Start_IT(&htim2, TIM_CHANNEL_1);
-}
-
-void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
-{
-
-  if(tim_baseHandle->Instance==TIM2)
-  {
-    /* TIM2 clock enable */
-    __HAL_RCC_TIM2_CLK_ENABLE();
-
-    /* TIM2 interrupt Init */
-    HAL_NVIC_SetPriority(TIM2_IRQn, 0, 0);
-    HAL_NVIC_EnableIRQ(TIM2_IRQn);
-  }
-}
-
-void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
-{
-
-  if(tim_baseHandle->Instance==TIM2)
-  {
-    /* Peripheral clock disable */
-    __HAL_RCC_TIM2_CLK_DISABLE();
-
-    /* TIM2 interrupt Deinit */
-    HAL_NVIC_DisableIRQ(TIM2_IRQn);
-  }
-}
-
-void TIM2_IRQHandler(void)
-{
-  HAL_TIM_IRQHandler(&htim2);
-}
+// [V1.5.0] 아래 함수들을 모두 삭제합니다.
+/*
+void usbHidInitTimer(void) { ... }
+void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle) { ... }
+void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle) { ... }
+void TIM2_IRQHandler(void) { ... }
+*/
 
 // [V1.1.0] 리팩토링: 자동 안정성 검사 로직 분리
 void usbHidProcessAutoStability(void)
@@ -1362,13 +1287,11 @@ void usbHidProcessReportQueue(void)
     if (p_hhid->state == USBD_HID_IDLE)
     {
       qbufferRead(&report_q, (uint8_t *)hid_buf, 1);
-      
       // [V1.3.0] 버그 수정: 큐에서 꺼낼 때 key_time_pre 갱신
-      key_time_pre = micros();
+      key_time_pre = micros64(); // [V1.5.0] micros64()로 변경
       key_time_req = true;
-
       // [V1.2.0] 버그 수정: 큐에서 꺼낼 때, 시간과 플래그를 함께 설정
-      rate_debug.rate_time_pre = micros();
+      rate_debug.rate_time_pre = micros64(); // [V1.5.0] micros64()로 변경
       rate_debug.rate_time_req = true;
       USBD_HID_SendReport((uint8_t *)hid_buf, HID_KEYBOARD_REPORT_SIZE);
     }
@@ -1397,7 +1320,9 @@ void usbHidProcessReportQueue(void)
 }
 
 
-void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+// [V1.5.0] HAL_TIM_PWM_PulseFinishedCallback 함수를 아래 함수로 대체합니다.
+// 이 함수는 이제 micros.c의 콜백을 통해 125us 마다 호출됩니다.
+static void usbHidTimerCallback(void)
 {
   // 1. 자동 안정성 모드 로직 실행
   usbHidProcessAutoStability();
@@ -1411,8 +1336,7 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
   rate_debug.timer_cnt++;
   rate_debug.sof_cnt++;
 
-  // [V1.1.0] 버그 수정: SOF와 Timer 콜백 간의 시간차를 정확히 측정
-  rate_debug.sof_interval_us = micros() - timer_sof_start_time;
+  rate_debug.sof_interval_us = micros64() - timer_sof_start_time; // 변경
   if (rate_debug.sof_interval_us > rate_debug.sof_interval_max_us)
   {
       rate_debug.sof_interval_max_us = rate_debug.sof_interval_us;
@@ -1600,6 +1524,54 @@ void cliCmd(cli_args_t *args)
     ret = true;
   }
 
+  // [V1.6.3] RCC 레지스터 확인용 명령어 수정 (H7RSxx 시리즈에 맞게)
+  if (args->argc == 2 && args->isStr(0, "check") && args->isStr(1, "reg"))
+  {
+    // APBCFGR 레지스터의 전체 값을 16진수로 출력
+    uint32_t apbcfgr_val = RCC->APBCFGR;
+    cliPrintf("--- RCC Register Check ---\r\n");
+    cliPrintf(" RCC->APBCFGR (raw hex): 0x%08X\r\n", apbcfgr_val);
+
+    // PPRE1 비트 필드(APB1 Prescaler)만 추출
+    uint32_t ppre1_bits = (apbcfgr_val & RCC_APBCFGR_PPRE1_Msk) >> RCC_APBCFGR_PPRE1_Pos;
+    cliPrintf(" PPRE1 field (bits 14-12): 0b");
+    cliPrintf("%d", (ppre1_bits >> 2) & 1);
+    cliPrintf("%d", (ppre1_bits >> 1) & 1);
+    cliPrintf("%d\r\n", (ppre1_bits >> 0) & 1);
+
+    cliPrintf(" Interpretation: ");
+    switch(ppre1_bits)
+    {
+      case 0b000: case 0b001: case 0b010: case 0b011:
+        cliPrintf("HCLK not divided (/1)\r\n");
+        cliPrintf(" -> Timer Clock is PCLK1\r\n");
+        break;
+      case 0b100:
+        cliPrintf("HCLK divided by 2 (/2)\r\n");
+        cliPrintf(" -> Timer Clock is PCLK1 * 2\r\n");
+        break;
+      case 0b101:
+        cliPrintf("HCLK divided by 4 (/4)\r\n");
+        cliPrintf(" -> Timer Clock is PCLK1 * 2\r\n");
+        break;
+      case 0b110:
+        cliPrintf("HCLK divided by 8 (/8)\r\n");
+        cliPrintf(" -> Timer Clock is PCLK1 * 2\r\n");
+        break;
+      case 0b111:
+        cliPrintf("HCLK divided by 16 (/16)\r\n");
+        cliPrintf(" -> Timer Clock is PCLK1 * 2\r\n");
+        break;
+      default:
+        cliPrintf("Unknown value\r\n");
+        break;
+    }
+    cliPrintf("--------------------------\r\n");
+
+    ret = true;
+  }
+
+
   if (ret == false)
   {
     cliPrintf("usbhid info\r\n");
@@ -1608,6 +1580,7 @@ void cliCmd(cli_args_t *args)
     cliPrintf("usbhid rate his\r\n");
     cliPrintf("usbhid log\r\n");
     cliPrintf("usbhid log clear\r\n");
+    cliPrintf("usbhid check reg\r\n");
   }
 }
 #endif

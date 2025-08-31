@@ -14,6 +14,10 @@ extern "C" {
 bool microsInit(void);
 uint32_t micros(void);
 
+// [V1.5.0] 오버플로우-안전 64비트 마이크로초 함수 및 콜백 함수 추가
+uint64_t micros64(void);
+void microsSetCallback(void (*p_func)(void));
+
 
 #endif
 
@@ -23,4 +27,4 @@ uint32_t micros(void);
 #endif
 
 
-#endif 
+#endif

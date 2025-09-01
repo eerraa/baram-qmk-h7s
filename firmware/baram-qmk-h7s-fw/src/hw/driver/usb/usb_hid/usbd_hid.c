@@ -587,9 +587,10 @@ static uint8_t USBD_HID_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
   (void)USBD_LL_OpenEP(pdev, HID_VIA_EP_IN, USBD_EP_TYPE_INTR, HID_VIA_EP_SIZE);
   pdev->ep_in[HID_VIA_EP_IN & 0x0FU].is_used = 1U;
 
-  pdev->ep_in[HID_VIA_EP_OUT & 0x0FU].bInterval = pdev->dev_speed == USBD_SPEED_HIGH ? HID_HS_BINTERVAL:HID_FS_BINTERVAL;
+  // [V1.8.4] FIX: OUT 엔드포인트 메타데이터는 ep_out[]에 설정되어야 함
+  pdev->ep_out[HID_VIA_EP_OUT & 0x0FU].bInterval = pdev->dev_speed == USBD_SPEED_HIGH ? HID_HS_BINTERVAL:HID_FS_BINTERVAL; // [V1.8.4]
   (void)USBD_LL_OpenEP(pdev, HID_VIA_EP_OUT, USBD_EP_TYPE_INTR, HID_VIA_EP_SIZE);
-  pdev->ep_in[HID_VIA_EP_OUT & 0x0FU].is_used = 1U;
+  pdev->ep_out[HID_VIA_EP_OUT & 0x0FU].is_used = 1U;       
 
   // EXK EP
   //
@@ -828,7 +829,7 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
   * @param  pdev: device instance
   * @retval status
   */
-uint8_t USBD_HID_EP0_RxReady(USBD_HandleTypeDef *pdev)
+static uint8_t USBD_HID_EP0_RxReady(USBD_HandleTypeDef *pdev) // [V1.8.4] 선언과 일치
 {
   logDebug("USBD_HID_EP0_RxReady()\n");
   logDebug("  req->bmRequest : 0x%X\n", ep0_req.bmRequest);
@@ -1469,8 +1470,10 @@ void usbHidProcessReportQueue(void)
   {
     USBD_HandleTypeDef *pdev = &USBD_Device;
     qbufferRead(&via_report_q, (uint8_t *)via_hid_usb_report, 1);
-    USBD_LL_Transmit(pdev, HID_VIA_EP_OUT, via_hid_usb_report, sizeof(via_hid_usb_report));
-    USBD_LL_PrepareReceive(pdev, HID_VIA_EP_OUT, via_hid_usb_report, sizeof(via_hid_usb_report));
+    // [V1.8.4] FIX: OUT EP로의 Transmit 시도는 논리적 오류.
+    // VIA 응답(IN 송신)은 via.c의 raw_hid_send()가 단일 경로로 담당한다.
+    // 따라서 여기서는 OUT EP의 수신만 무한 준비(재-ARM)한다.
+    USBD_LL_PrepareReceive(pdev, HID_VIA_EP_OUT, via_hid_usb_report, sizeof(via_hid_usb_report));  // [V1.8.4]
   }
 }
 

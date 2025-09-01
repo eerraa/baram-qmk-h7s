@@ -1,5 +1,8 @@
 #include "via_hid.h"
 #include "raw_hid.h"
+#include "usb/usb_hid/usbd_hid.h"
+
+extern USBD_HandleTypeDef USBD_Device;
 
 
 #define USE_VIA_HID_PRINT   0
@@ -47,7 +50,28 @@ void via_hid_init(void)
 
 void raw_hid_send(uint8_t *data, uint8_t length)
 {
-  
+  USBD_HandleTypeDef *pdev = &USBD_Device;
+  USBD_HID_HandleTypeDef *p_hhid;
+
+  p_hhid = (USBD_HID_HandleTypeDef *)pdev->pClassDataCmsit[pdev->classId];
+
+  if (p_hhid == NULL)
+  {
+    return;
+  }
+
+  if (pdev->dev_state != USBD_STATE_CONFIGURED)
+  {
+    return;
+  }
+
+  if (p_hhid->state != USBD_HID_IDLE)
+  {
+    return;
+  }
+
+  p_hhid->state = USBD_HID_BUSY;
+  USBD_LL_Transmit(pdev, HID_VIA_EP_IN, data, length);
 }
 
 void via_hid_receive(uint8_t *data, uint8_t length)

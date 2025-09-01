@@ -19,3 +19,4 @@
 #define EECONFIG_USER_KILL_SWITCH_UD  ((void *)((uint32_t)EECONFIG_USER_DATABLOCK + 16)) // 8B
 #define EECONFIG_USER_KKUK            ((void *)((uint32_t)EECONFIG_USER_DATABLOCK + 24)) // 4B
 #define EECONFIG_USER_POLLING_RATE    ((void *)((uint32_t)EECONFIG_USER_DATABLOCK + 28)) // 1B
+#define EECONFIG_USER_BOOT_MODE       ((void *)((uint32_t)EECONFIG_USER_DATABLOCK + 29)) // 1B

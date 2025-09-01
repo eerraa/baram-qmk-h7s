@@ -610,11 +610,9 @@ static uint8_t USBD_HID_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
   {
     is_first = false;
 
-    //polling_rate_init(); 주석처리함, hwInit() 함수에서 이미 호출됨
-
     qbufferCreateBySize(&report_q, (uint8_t *)report_buf, sizeof(report_info_t), 128);
     qbufferCreateBySize(&via_report_q, (uint8_t *)via_report_q_buf, sizeof(via_report_info_t), 128);
-    qbufferCreateBySize(&report_exk_q, (uint8_t *)report_exk_buf, sizeof(report_info_t), 128);
+    qbufferCreateBySize(&report_exk_q, (uint8_t *)report_exk_buf, sizeof(exk_report_info_t), 128); // [V1.8.5] EXK 큐 요소 크기 정정
 
     logPrintf("[OK] USB Hid\n");
     logPrintf("     Keyboard\n");

@@ -87,10 +87,6 @@ uint8_t matrix_scan(void)
   }
 
   changed = debounce(raw_matrix, matrix, MATRIX_ROWS, changed);
-  if (changed)
-  {
-    usbHidSetTimeLog(0, pre_time);
-  }
   matrix_info();
 
   return (uint8_t)changed;
@@ -109,7 +105,7 @@ void matrix_info(void)
       usb_hid_rate_info_t hid_info;
 
       usbHidGetRateInfo(&hid_info);
-      
+
       logPrintf("Scan Rate : %d.%d KHz\n", get_matrix_scan_rate()/1000, get_matrix_scan_rate()%1000);
       logPrintf("Poll Rate : %d Hz, %d us(max), %d us(min)\n",
                 hid_info.freq_hz,
@@ -132,7 +128,7 @@ void cliCmd(cli_args_t *args)
     usb_hid_rate_info_t hid_info;
 
     usbHidGetRateInfo(&hid_info);
-    
+
     logPrintf("Scan Rate : %d.%d KHz\n", get_matrix_scan_rate()/1000, get_matrix_scan_rate()%1000);
     logPrintf("Poll Rate : %d Hz, %d us(max), %d us(min)\n",
               hid_info.freq_hz,

@@ -146,7 +146,7 @@ extern USBD_ClassTypeDef USBD_HID;
 uint32_t USBD_HID_GetPollingInterval(USBD_HandleTypeDef *pdev);
 
 
-enum 
+enum
 {
   USB_HID_LED_NUM_LOCK    = (1 << 0),
   USB_HID_LED_CAPS_LOCK   = (1 << 1),
@@ -166,7 +166,6 @@ bool usbHidSetViaReceiveFunc(void (*func)(uint8_t *, uint8_t));
 bool usbHidSendReport(uint8_t *p_data, uint16_t length);
 bool usbHidSendReportEXK(uint8_t *p_data, uint16_t length);
 bool usbHidGetRateInfo(usb_hid_rate_info_t *p_info);
-bool usbHidSetTimeLog(uint16_t index, uint32_t time_us);
 void usbHidSetStatusLed(uint8_t led_bits);
 
 /**
@@ -177,15 +176,9 @@ void usbHidSetStatusLed(uint8_t led_bits);
 }
 #endif
 
-// CLI 상태 로깅을 위한 함수 선언
-bool usbHidIsCliStatusEnabled(void);
-uint32_t usbHidGetActualRate(void);
-
 // 자동 안정성 모드를 위한 API 추가
 #define STABILITY_THRESHOLD 60             // 60초(1분) 연속 안정 시 복구 가능 상태로 전환
 uint32_t usbHidGetStabilityCounter(void);
-
-uint32_t usbHidGetSofDtMs(void);           // [V1.8.2] SOF dT(ms) getter 선언
 
 #endif  /* __USB_HID_H */
 /**

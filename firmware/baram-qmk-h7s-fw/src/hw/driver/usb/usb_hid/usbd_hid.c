@@ -437,24 +437,6 @@ extern USBD_HandleTypeDef USBD_Device;
 // [V1.5.0] 8kHz 콜백으로 호출될 함수 프로토타입
 static void usbHidTimerCallback(void);
 
-// [V1.8.1] 기대 폴링 간격 계산 유틸
-static uint32_t usbHidExpectedIntervalUs(void)
-{
-  USBD_HandleTypeDef *pdev = &USBD_Device;
-  uint8_t b = pdev->ep_in[HIDInEpAdd & 0x0FU].bInterval;
-  if (b == 0) b = 1;
-  if (pdev->dev_speed == USBD_SPEED_HIGH)
-  {
-    // HS: 125us * 2^(bInterval-1)
-    return 125U * (1U << (b - 1U));
-  }
-  else
-  {
-    // FS: bInterval * 1ms
-    return (uint32_t)b * 1000U;
-  }
-}
-
 /**
   * @brief  USBD_HID_Init
   *         Initialize the HID interface

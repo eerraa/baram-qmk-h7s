@@ -54,6 +54,9 @@ file(GLOB QMK_SRC_FILES CONFIGURE_DEPENDS
   # ${QMK_KEYBOARD_PATH}/*.c
   ${QMK_KEYBOARD_PATH}/port/*.c
   
+  #추가
+  ${QMK_ROOT_PATH}/port/override.c
+  
   ${QMK_ADD_FILES}
 )
 

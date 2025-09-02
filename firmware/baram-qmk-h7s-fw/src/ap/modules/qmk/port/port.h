@@ -10,7 +10,7 @@
 
 
 
-#define QMK_BUILDDATE   "2024-04-23-11:29:54"
+#define QMK_BUILDDATE   "2025-06-27-17:35:30"
 
 
 #define EECONFIG_USER_LED_CAPS        ((void *)((uint32_t)EECONFIG_USER_DATABLOCK +  0)) // 4B

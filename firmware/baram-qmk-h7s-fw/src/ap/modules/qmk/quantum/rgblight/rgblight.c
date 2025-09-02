@@ -24,6 +24,7 @@
 #include "util.h"
 #include "led_tables.h"
 #include <lib/lib8tion/lib8tion.h>
+#include "override.h" // 전역 오버라이드 플래그
 #ifdef EEPROM_ENABLE
 #    include "eeprom.h"
 #endif
@@ -895,6 +896,10 @@ void rgblight_wakeup(void) {
 #endif
 
 void rgblight_set(void) {
+    if (rgblight_override_enable) {
+        return;
+    }
+    
     rgb_led_t *start_led;
     uint8_t    num_leds = rgblight_ranges.clipping_num_leds;
 
@@ -1040,6 +1045,9 @@ static void rgblight_effect_dummy(animation_status_t *anim) {
 }
 
 void rgblight_timer_task(void) {
+    if (rgblight_override_enable) {
+        return;
+    }
     if (rgblight_status.timer_enabled) {
         effect_func_t effect_func   = rgblight_effect_dummy;
         uint16_t      interval_time = 2000; // dummy interval
